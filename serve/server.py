@@ -2472,6 +2472,26 @@ def main() -> int:
         lazy = a.lazy or cfg.get("lazy_load") is True
         if lazy and cfg.get("vision"):
             ap.error("lazy loading is text-only; disable vision in the config")
+        # The engine reads token_embd.weight from --native and the PLE table from --ple-gguf and has no fallback
+        # for either: a model that fails one of those checks takes the engine down a second after it starts, and
+        # the only thing in the log is "native embedding: ...".  Say what it is before the minutes of loading
+        # (tools/native_check.py holds the checks and the engine's own sources for them).
+        try:
+            import native_check as NC
+        except ImportError:                             # a partial install: the engine's own error stands
+            NC = None
+        if NC is not None:
+            report = NC.check_config(cfg)
+            if not report.ok():
+                print("", flush=True)
+                print("[strata] this model cannot be loaded: the engine would exit a second after starting and no "
+                      "model would be ready.  What is wrong:", flush=True)
+                for p in report.problems:
+                    print(f"[strata]   {p}", flush=True)
+                print(f"[strata] {NC.REMEDY}", flush=True)
+                print(f"[strata] the same report, at any time: python tools/native_check.py --config "
+                      f"{Path(a.config).name}", flush=True)
+                ap.error(f"the model in {a.config} cannot be loaded by this engine")
         if cfg.get("vision"):
             print("loading the vision encoder ...", flush=True)
             # relative paths are the config's cwd's, as for the engine below
