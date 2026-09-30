@@ -116,6 +116,25 @@ where it left off) and **starts the model**. Your browser opens the Strata app a
 **Next time**, just double-click `START-HERE.bat` again: it starts right away, nothing is downloaded twice. Close its
 window to stop the model.
 
+**Starting and stopping it.** `START-HERE.bat` starts the model, and to stop it there are two scripts in `Scripts\`:
+`Strata_Start.bat` and `Strata_Stop.bat`. They do the same as `START-HERE.bat`, but start from either side of a
+running model, so make a Desktop shortcut to each if you want them a double-click away (right-click the file, *Send
+to*, *Desktop*). Both find Strata from wherever they are, so a shortcut works from any working directory, and a start
+with no model installed says so instead of starting an empty server.
+
+- `Strata_Start.bat` starts the newest `strata-*.json` model in the folder. It also takes `/restart` (stop what is
+  running, then start it), `/status` (say what is running, change nothing), `/window` (its own window, so the
+  shortcut gets its prompt back) and `/noopen` (do not open the browser). Anything else goes to the server, as in
+  `Strata_Start.bat --gpu 1`.
+- `Strata_Stop.bat` stops the server and the model. It kills the server first, which closes the engine's input: the
+  model then leaves its serve loop by itself and gives the RAM and the locked VRAM back. That takes a few seconds for
+  a big model; `/force` does not wait for it, `/timeout N` changes how long it waits (60 s), and `/status` says what
+  is running without changing anything.
+
+Starting twice is caught rather than failing on a busy port: the second start says what is already running and prints
+the address. The same goes for a model whose server died - it still holds its memory, so it is reported instead of
+being loaded over.
+
 **Updating:** download the new version and unzip it anywhere (or `git pull`), then run `START-HERE.bat` in it. The
 model files are kept in a `Strata-data` folder next to your Strata folder, so a new copy finds them and sets itself up
 the same way - nothing big is downloaded again.

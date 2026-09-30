@@ -628,6 +628,74 @@ def check_shards(shards):
                  "delete it and run setup again (or copy the whole file into --gguf-dir)")
 
 
+SHARD_RE = re.compile(r"^(?P<stem>.+)-(?P<no>\d{5})-of-(?P<count>\d{5})\.gguf$", re.IGNORECASE)
+
+
+def shard_set(first: Path):
+    """Every shard beside `first` (<stem>-0000N-of-0000M.gguf), or just `first` when its name is not a split one."""
+    m = SHARD_RE.match(first.name)
+    if not m:
+        return [first]
+    count = int(m.group("count"))
+    return [first.with_name("%s-%05d-of-%05d.gguf" % (m.group("stem"), i, count)) for i in range(1, count + 1)]
+
+
+def discover_shards(models_dir: Path, fam, model: str, own_only: bool):
+    """The model's shard files in `models_dir`, and the name that set calls itself.
+
+    The family's own file names when the whole set is there (the download flow).  Otherwise a complete
+    -0000N-of-0000M.gguf set whose stem carries `model`: other people's files of the same model are a different
+    number of shards under a name of their own (the Unsloth 'UD-' IQ3_XXS is three, not two), and they cannot be
+    packed as if they were the family's - their expert encodings and their BF16 projections differ.
+    `own_only` is True with --gguf-dir, where the family's names must not be required.
+
+    The second value names the pack, the config and the start script: '' for the family's own files, 'UD' for the
+    Unsloth ones, so both can be installed side by side without either pack's native_experts.txt (types and
+    offsets) being used with the other's weights.
+    """
+    exact = [models_dir / fam["file"].format(q=model, i=i) for i in (1, 2)]
+    if not own_only or all(p.is_file() for p in exact):
+        return exact, ""
+    found = []
+    partial = []
+    for first in sorted(models_dir.glob("*-00001-of-*.gguf")):
+        if model.lower() not in first.name.lower():
+            continue
+        shards = shard_set(first)
+        if all(p.is_file() for p in shards):
+            stem = SHARD_RE.match(first.name).group("stem")
+            label = stem[:stem.lower().rfind(model.lower())].replace(fam["title"], "").strip("-_ .")
+            label = re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-")
+            found.append((shards, label))
+        else:
+            partial.append(shards)
+    if len(found) > 1:
+        fail(f"{len(found)} {model} sets are in {models_dir}: "
+             + ", ".join(s[0].name for s in found), "keep one, or one folder per model (--gguf-dir)")
+    if not found and partial:
+        fail(f"{model} is in {models_dir} but the set is not whole: missing "
+             + ", ".join(p.name for s in partial for p in s if not p.is_file()),
+             "finish or copy the download, or delete the partial files")
+    return found[0] if found else (exact, "")
+
+
+def needs_compat_bf16(shards) -> bool:
+    """True when these GGUFs store one of the small projections the kernels read as BF16 in another encoding.
+
+    The family's own GSQ-RCO files already store them as BF16.  Ordinary quants (the Unsloth 'UD-' files) quantize
+    them too, and iq_pack.py refuses such a file unless it is told --compat-bf16, which dequantizes exactly those
+    tensors back to BF16 (round-to-nearest-even; experts, the attention weights and the PLE table stay unchanged).
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    import gguf_reader as GGUFFile_reader
+    import iq_pack
+    for s in shards:
+        for t in GGUFFile_reader.GGUFFile(s).tensors:
+            if t.type_name != "BF16" and iq_pack.needs_bf16(t.name, t.type_name):
+                return True
+    return False
+
+
 def get_llama_cpp():
     """llama.cpp at the pinned commit (ggml for the build, gguf-py for the tools, mtmd for images), as a zip: no git."""
     llama = ROOT / "third_party" / "llama.cpp"
@@ -1231,6 +1299,13 @@ def repoint_config(cfg_file: Path, old: Path, new: Path) -> None:
         cfg_file.write_text(json.dumps(new_cfg, indent=1), encoding="utf-8")
 
 
+def model_configs(folder: Path) -> list:
+    """The model configs in a folder.  The Chat settings the server saves beside a config
+    (strata-<tag>.shared-settings.json) match "strata-*.json" as well - * matches the dot - and they hold no
+    engine path, so they are left out rather than offered or started as if they were a model."""
+    return [p for p in folder.glob("strata-*.json") if not p.name.endswith(".shared-settings.json")]
+
+
 def data_folder(requested: str | None) -> tuple:
     """(the data folder, folders on other drives that still hold model files).  Moves the model files of this folder
     and of earlier Strata folders on the same drive into the data folder, and points their configs there."""
@@ -1262,7 +1337,7 @@ def data_folder(requested: str | None) -> tuple:
                 (folder / d).rmdir()                    # empty now
             except OSError:
                 pass
-        for c in folder.glob("strata-*.json"):
+        for c in model_configs(folder):
             repoint_config(c, folder, dest)
         if has_data(folder):
             elsewhere.append(folder)                    # in use, or a copy the data folder already has
@@ -1278,7 +1353,7 @@ def previous_config(elsewhere_first: list, settings: dict):
     """The most recently used model config of another Strata folder on this PC, for a folder that has none yet."""
     cands = []
     for folder in [*elsewhere_first, *other_installs(settings)]:
-        cands += list(folder.glob("strata-*.json"))
+        cands += model_configs(folder)
     cands = [c for c in dict.fromkeys(cands) if c.is_file()]
     return max(cands, key=lambda p: p.stat().st_mtime) if cands else None
 
@@ -1313,7 +1388,7 @@ def find_in(roots: list, rel: str):
 
 # ------------------------------------------------------------------------------------------------ start
 def installed_configs():
-    return sorted(ROOT.glob("strata-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return sorted(model_configs(ROOT), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def source_version() -> str:
@@ -1568,7 +1643,8 @@ def main() -> int:
     ap.add_argument("--data-dir", help="where the model files go (~70-120 GB): default Strata-data next to this folder, "
                                        "remembered for every Strata folder on this PC")
     ap.add_argument("--models-dir", help="where the GGUF files go (default: <data folder>/models)")
-    ap.add_argument("--gguf-dir", help="use GGUF files you already have (a folder with the two shards)")
+    ap.add_argument("--gguf-dir", help="use GGUF files you already have (a folder with the model's shards: any number, "
+                                       "any name)")
     ap.add_argument("--yes", action="store_true", help="accept the recommended answers")
     ap.add_argument("--setup", action="store_true", help="install another model or change settings")
     ap.add_argument("--no-start", action="store_true", help="install only, do not start the model")
@@ -1853,7 +1929,10 @@ def main() -> int:
     elif esp_choice.lower() not in ("", "off", "no", "n", "0"):
         warn("the experimental speed projection is made for the original Qwen3.8-Flash-Next, not Swift 1.5: left off")
     models_dir = Path(a.gguf_dir) if a.gguf_dir else Path(a.models_dir) / tag
-    shards = [models_dir / fam["file"].format(q=model, i=i) for i in (1, 2)]
+    shards, label = discover_shards(models_dir, fam, model, own_only=bool(a.gguf_dir))
+    if label:                                          # the user's own files: a pack and a start script of their own
+        tag = f"{tag}-{label}"
+        ok(f"model files: {shards[0].name} ({len(shards)} shards, the '{label}' set)")
     if not a.gguf_dir and not all(sh.exists() and done(sh) for sh in shards):
         for r in elsewhere:                            # already downloaded in a Strata folder on another drive
             cand = [r / "models" / tag / sh.name for sh in shards]
@@ -1918,8 +1997,11 @@ def main() -> int:
     if not mmproj.exists():
         mmproj = find_in(roots, f"models/{fam['mmproj']}") or mmproj
     if vision != "none":
+        own_mmproj = sorted(Path(a.gguf_dir).glob("mmproj*.gguf")) if a.gguf_dir else []
         if not mmproj.exists() and a.gguf_dir and (Path(a.gguf_dir) / fam["mmproj"]).exists():
             mmproj = Path(a.gguf_dir) / fam["mmproj"]
+        elif not mmproj.exists() and own_mmproj:
+            mmproj = own_mmproj[0]        # the folder's own encoder (the 'UD-' releases name it mmproj-F16.gguf)
         else:
             download(fam["mmproj_hf"] + fam["mmproj"], mmproj, "vision encoder")
         ok(f"vision encoder: {mmproj}")
@@ -1940,7 +2022,14 @@ def main() -> int:
                  "--out", str(pack)], env=env)   # writes <pack>/tokenizer/
     elif not (pack / "native_experts.txt").exists() or not (pack / "tokenizer" / "vocab.json").exists():
         # every tensor as the GGUF stores it; the experts are read from the GGUF at start (seconds to build)
-        run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack)], env=env)
+        compat = []
+        if needs_compat_bf16(shards):
+            say("  These files store the small projections the kernels read as BF16 in another encoding;")
+            say("  iq_pack.py --compat-bf16 dequantizes exactly those back to BF16 (round-to-nearest-even).")
+            say("  Experts, the attention weights and the PLE table are left untouched.")
+            compat = ["--compat-bf16"]
+        run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack)] + compat,
+            env=env)
     if low_ram and not (pack / "experts.bin").exists():
         say(f"  Writing the experts into one file for the low-RAM mode (one time, {MODELS[model]['arena_gb']:.0f} GB) ...")
         run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack),
@@ -1996,7 +2085,8 @@ def main() -> int:
         args += ["--control-vector-scaled", f"{esp}:1.0", "--control-vector-layer-range", "4", "44",
                  "--cvec-mode", "project", "--cvec-dir", "per-layer"]
     cfg = {"exe": str(eng / EXE), "args": args, "cwd": str(ROOT), "tokenizer": str(pack / "tokenizer"),
-           "model_name": f"{fam['name']}-{model.lower()}", "log": str(ROOT / f"strata-{tag.lower()}.log"),
+           "model_name": f"{fam['name']}-{model.lower()}" + (f"-{label.lower()}" if label else ""),
+           "log": str(ROOT / f"strata-{tag.lower()}.log"),
            "lib_dirs": lib_dirs, "port": port}
     if hip:
         cfg["backend"] = "hip"
