@@ -126,6 +126,51 @@ class MaxTokens(unittest.TestCase):
                 s, b, _, _ = self.call(api, max_tokens=CTX)
                 self.assertEqual(s, 400)
                 self.assertIn("exceeds the context", b["error"]["message"])
+                self.assertIn("fit_max_tokens", b["error"]["message"])     # the remedy travels with the 400
+
+    def test_a_refusal_is_recorded_and_explained(self):
+        """The Monitor and the log both say a request was refused: nothing ran, so totals stay put."""
+        before = dict(self.svc.totals)
+        s, b, _, _ = self.call("anthropic", max_tokens=CTX)
+        self.assertEqual(s, 400, b)
+        row = list(self.svc.history)[-1]
+        self.assertEqual(row["finish"], "rejected")
+        self.assertGreater(row["prompt_tokens"], 0)
+        self.assertEqual(row["output_tokens"], 0)
+        self.assertIsNone(row["reused"])
+        self.assertEqual(row["duration_s"], 0.0)
+        self.assertEqual(row["max_tokens"], CTX)
+        self.assertEqual(dict(self.svc.totals), before)                    # it is not a request that ran
+
+    def test_the_refusal_breakdown_attributes_the_prompt(self):
+        """The line that answers "where did all those tokens come from": system, tools, largest messages."""
+        msgs = [{"role": "system", "content": "s" * 500}, {"role": "user", "content": "u" * 800},
+                {"role": "user", "content": "v" * 50}]
+        tools = [{"name": "t", "description": "d" * 300, "parameters": {"type": "object"}}]
+
+        def n(ms, tl):
+            return len(self.svc.tok.encode(self.svc.template.render(ms, tools=tl), parse_special=True))
+        ids, _, _ = self.svc.prepare(msgs, tools, {})
+        detail = self.svc.refusal_detail(msgs, tools, {}, len(ids))
+        self.assertIn(f"system {n(msgs[:1], None):,}", detail)
+        self.assertIn(f"tools {n(msgs, tools) - n(msgs, None):,}", detail)      # no images: the correction is 0
+        self.assertIn(f"user {n(msgs[1:2], None):,}", detail)                   # the largest message, sized alone
+        self.assertEqual(self.svc.refusal_detail(None, None, {}, 0), "")        # junk: a diagnostic never raises
+
+    def test_debug_log_shows_a_refused_request(self):
+        import contextlib
+        import io
+        os.environ["STRATA_DEBUG"] = "1"
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                s, _, _, _ = self.call("anthropic", max_tokens=CTX)
+            self.assertEqual(s, 400)
+            log = out.getvalue()
+            self.assertIn("[strata] refused anthropic:", log)
+            self.assertIn("prompt_tokens=", log)                           # _debug_req fires for a refusal too
+        finally:
+            del os.environ["STRATA_DEBUG"]
 
     def test_unset_budget_with_a_near_full_prompt(self):
         _, _, pt0, _ = self.call("openai", max_tokens=1)
@@ -144,6 +189,11 @@ class MaxTokens(unittest.TestCase):
                 s, b, _, _ = self.call(api, text=text)
                 self.assertEqual(s, 400, b)
                 self.assertIn("no room to answer", b["error"]["message"])
+                self.assertIn("fit_max_tokens cannot help", b["error"]["message"])     # the remedy, not just the numbers
+                row = list(self.svc.history)[-1]
+                self.assertEqual(row["finish"], "rejected")
+                self.assertEqual(row["reason"], "no room")
+                self.assertIsNone(row["max_tokens"])    # the client asked for the rest of the context
 
     def test_debug_log_shows_the_resolved_budget(self):
         import contextlib

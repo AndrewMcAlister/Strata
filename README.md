@@ -163,6 +163,12 @@ More: [where your chats are stored](docs/INSTALL.md#where-things-are-stored), [t
   close other programs (browsers use a lot), or pick a smaller size (Q2_0 or IQ2_XS).
 - **It says port 8080 is already in use.** Strata is already running - look for its window.
 
+- **It says the prompt exceeds the context.** The conversation is longer than the context you chose. Start a new chat -
+  that is usually enough for a long agent session. Or run `SETUP.bat` and pick more context; if it names a `max tokens`
+  figure too, your app is also asking for more answer than the window has left (lower its max output tokens, or set
+  `"fit_max_tokens": true` in `strata-<model>.json` to have Strata shorten the answer instead). Either way the request
+  is refused, never cut, and the Monitor shows it as a **Refused** row with the prompt's real size.
+
 More problems and their fixes: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). Still stuck? Open an
 [issue](https://github.com/Niko1221/Strata/issues) and attach `strata-<model>.log` from the Strata folder.
 
