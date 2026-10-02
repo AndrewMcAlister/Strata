@@ -61,6 +61,12 @@ VISION_START = "<|vision_start|>"
 # #123: what closes the thinking when it reaches reasoning_budget_tokens (the model's own end-of-thinking tag after it)
 REASONING_WRAP_UP = "\n\nI have thought about this long enough; time to give my answer.\n</think>\n\n"
 CTX_SLACK = 8               # `strata --serve` rejects prompt + max_new + 8 > context: keep the same margin here
+# What to do about a refusal.  Shared by the 400 the client sees and the [strata] refused line, so the two cannot
+# drift apart.  fit_max_tokens shortens an answer that has some room to start in; with none at all it cannot help.
+REMEDY_NO_ROOM = ("Start a new chat, raise the context (run setup and pick a bigger one) or lower the client's max "
+                  "output tokens; fit_max_tokens cannot help, there is no room for even one token")
+REMEDY_EXCEEDS = ("Lower max_tokens (the client's max output tokens), start a new chat, raise the context with "
+                  "setup, or set fit_max_tokens to shorten the answer to the room left")
 # The live tok/s is a rate over a window, not a mean since the first token: a mean reads ~1/elapsed at the first
 # token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.
 RATE_WINDOW_S = 2.0
@@ -1116,12 +1122,13 @@ class Service:
                 "ram": {"used_gib": scaled(hw.get("ram_used"), 2 ** 30, 1),
                         "total_gib": scaled(hw.get("ram_total"), 2 ** 30, 1)} if hw.get("ram_total") else None}}
 
-    def prepare(self, messages, tools, kwargs, max_new=None):
+    def prepare(self, messages, tools, kwargs, max_new=None, api: str = ""):
         """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
         the rest of the context."""
         prompt = self.template.render(messages, tools=tools, **kwargs)
         ids = self.tok.encode(prompt, parse_special=True)
         self.embeddings.path = None
+        img_tokens = 0                              # how much of the prompt is images (the refusal line says so)
         images = images_of(messages)
         if images:
             if self.vision is None:
@@ -1151,6 +1158,7 @@ class Service:
             if k != len(encoded):
                 raise ValueError("the prompt and its images do not match")
             ids = out
+            img_tokens = sum(c for _, c in encoded)
             combined = self.vision.dir / f"req-{uuid.uuid4().hex[:12]}.sve"
             with open(combined, "wb") as f:
                 for path, _ in encoded:
@@ -1161,15 +1169,72 @@ class Service:
         room = self.engine.max_context - CTX_SLACK - len(ids)
         if max_new is None or max_new <= 0 or (self.fit_max_tokens and room < 1):
             if room < 1:
+                self.refuse(api, len(ids), max_new, messages, tools, kwargs, img_tokens, "no room")
                 raise ValueError(f"prompt ({len(ids)} tokens) leaves no room to answer in the context "
-                                 f"({self.engine.max_context}); requests are never truncated")
+                                 f"({self.engine.max_context}); requests are never truncated. {REMEDY_NO_ROOM}")
             max_new = room
         elif max_new > room:
             if not self.fit_max_tokens:
+                self.refuse(api, len(ids), max_new, messages, tools, kwargs, img_tokens, "over the context")
                 raise ValueError(f"prompt ({len(ids)} tokens) + max tokens ({max_new}) exceeds the context "
-                                 f"({self.engine.max_context}); requests are never truncated")
+                                 f"({self.engine.max_context}); requests are never truncated. {REMEDY_EXCEEDS}")
             max_new = max(1, room)          # --fit-max-tokens: a shorter completion beats a 400
         return ids, kwargs.get("enable_thinking", True) is not False, max_new
+
+    def refuse(self, api, prompt_tokens, requested_max, messages, tools, kwargs, img_tokens=0, reason="no room"):
+        """A request the context guard refused: say so on stdout and keep it in /metrics, so a refusal is not
+        something only the client's error message knows about.  `totals` is deliberately left alone - the model
+        read and wrote nothing, so the Monitor's averages must not count it (a zero-ms prefill would print a
+        nonsense speed); the Monitor's requests table has the row, the ring and the speed cards keep the last
+        request that really ran (serve/web/app.js)."""
+        requested = requested_max if (requested_max or 0) > 0 else None
+        asked = f", asked for {requested:,} output tokens" if requested else ", no output cap given"
+        remedy = REMEDY_NO_ROOM if reason == "no room" else REMEDY_EXCEEDS
+        print(f"[strata] refused {api or 'request'}: prompt {prompt_tokens:,} tokens{asked}, context "
+              f"{self.engine.max_context:,} ({reason}); {remedy}", flush=True)
+        detail = self.refusal_detail(messages, tools, kwargs, prompt_tokens, img_tokens)
+        if detail:
+            print(f"[strata] refused: {detail}", flush=True)
+        with self.status_lock:
+            self.history.append({
+                "projection": None, "time": time.time(), "duration_s": 0.0, "finish": "rejected",
+                "prompt_tokens": prompt_tokens, "reused": None, "output_tokens": 0, "engine_generated": None,
+                "prompt_ms": None, "decode_ms": None, "decode_tok_s": None, "hit_rate": None,
+                "ram_blobs": None, "file_blobs": None, "file_mb": None,
+                "max_tokens": requested, "reason": reason})
+        if os.environ.get("STRATA_DEBUG"):              # _debug_req runs after prepare: a refused one never gets there
+            _debug_req(api, {"max_tokens": requested}, messages, tools, requested, True, prompt_tokens)
+
+    def refusal_detail(self, messages, tools, kwargs, prompt_tokens, img_tokens=0) -> str:
+        """Where a refused prompt's tokens went: the system message, the tools block, the images (their real encoded
+        expansion, not one pad token each) and the three largest messages.  Diagnostic only - it never raises, and it
+        renders the whole conversation at most once, so refusing a huge prompt does not become the slow part."""
+        def count(msgs, tls) -> int:
+            return len(self.tok.encode(self.template.render(msgs, tools=tls, **kwargs), parse_special=True))
+
+        def chars(m) -> int:                            # a cheap weight to pick the largest messages with
+            body = m.get("content")
+            if isinstance(body, str):
+                return len(body)
+            return sum(len(p.get("text", "")) for p in (body or []) if isinstance(p, dict))
+        try:
+            parts = []
+            if messages and messages[0].get("role") == "system":
+                parts.append(f"system {count(messages[:1], None):,}")
+            if tools:
+                # prompt_tokens is the rendered-with-tools count prepare already made: the difference from the
+                # tools-less render is the tool block plus, per image, its expansion less the one pad the template
+                # leaves behind when it is not expanded
+                sans = count(messages, None)
+                parts.append(f"tools {max(0, prompt_tokens - sans - (img_tokens - len(images_of(messages)))):,}")
+            if img_tokens:
+                parts.append(f"images {img_tokens:,}")
+            top = sorted(((chars(m), i) for i, m in enumerate(messages)), reverse=True)[:3]
+            parts.append("largest: " + ", ".join(f"{messages[i].get('role')} {count([messages[i]], None):,}"
+                                                 for _, i in top))
+            return " · ".join(parts)
+        except Exception:                               # a diagnostic must never be the thing that fails
+            return ""
 
     def _note(self, n, evs):
         with self.status_lock:
@@ -1491,7 +1556,7 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                          **({"reasoning_content": "".join(reasoning).strip()} if reasoning else {}),
                          "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in calls]})
         messages += [{"role": "tool", "content": r} for r in results]
-        ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req)
+        ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req, api="mcp")
     yield "done", {**done, "completion_tokens": total, "prompt_tokens": len(ids)}
 
 
@@ -2134,7 +2199,7 @@ def make_handler(svc: Service):
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
             svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, api="openai")
             _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
             cancel = threading.Event()
             self._watch_client(cancel)                       # #430 #431
@@ -2186,7 +2251,7 @@ def make_handler(svc: Service):
             messages, tools, kw = anthropic_to_messages(req, svc.anthropic_think_unasked)
             max_new = int(req.get("max_tokens") or 0)                  # 0/-1: the rest of the context
             svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, api="anthropic")
             _debug_req("anthropic", req, messages, tools, max_new, thinking, len(ids))
             cancel = threading.Event()
             self._watch_client(cancel)                       # #430 #431
@@ -2472,6 +2537,26 @@ def main() -> int:
         lazy = a.lazy or cfg.get("lazy_load") is True
         if lazy and cfg.get("vision"):
             ap.error("lazy loading is text-only; disable vision in the config")
+        # The engine reads token_embd.weight from --native and the PLE table from --ple-gguf and has no fallback
+        # for either: a model that fails one of those checks takes the engine down a second after it starts, and
+        # the only thing in the log is "native embedding: ...".  Say what it is before the minutes of loading
+        # (tools/native_check.py holds the checks and the engine's own sources for them).
+        try:
+            import native_check as NC
+        except ImportError:                             # a partial install: the engine's own error stands
+            NC = None
+        if NC is not None:
+            report = NC.check_config(cfg)
+            if not report.ok():
+                print("", flush=True)
+                print("[strata] this model cannot be loaded: the engine would exit a second after starting and no "
+                      "model would be ready.  What is wrong:", flush=True)
+                for p in report.problems:
+                    print(f"[strata]   {p}", flush=True)
+                print(f"[strata] {NC.REMEDY}", flush=True)
+                print(f"[strata] the same report, at any time: python tools/native_check.py --config "
+                      f"{Path(a.config).name}", flush=True)
+                ap.error(f"the model in {a.config} cannot be loaded by this engine")
         if cfg.get("vision"):
             print("loading the vision encoder ...", flush=True)
             # relative paths are the config's cwd's, as for the engine below

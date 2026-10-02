@@ -178,7 +178,7 @@ function setPill(state, text) {
 
 function render(m) {
   const live = m.live || {}, hw = m.hardware || {}, st = m.hardware_static || {}, eng = m.engine || {}, h = m.history || {};
-  const last = (m.requests || [])[0];
+  const last = (m.requests || []).find((r) => r.finish !== "rejected");   // a refused request never ran the model
   // the header pill
   if (live.state === "reading") {
     const pct = live.prompt_total ? Math.round((100 * live.prompt_read) / live.prompt_total) : null;
@@ -297,14 +297,18 @@ function renderMonitor(live, hw, st, eng, h, last, requests, totals, kept) {
     body.innerHTML = `<tr><td colspan="8" class="muted">No requests yet</td></tr>`;
   } else {
     const badge = {stop: ["", "Done"], length: ["", "Max tokens"], cancel: ["st-badge--queued", "Stopped"],
-                   disconnect: ["st-badge--queued", "Closed"], error: ["st-badge--error", "Error"]};
+                   disconnect: ["st-badge--queued", "Closed"], error: ["st-badge--error", "Error"],
+                   rejected: ["st-badge--error", "Refused"]};      // the context guard said no; it never ran
     body.innerHTML = requests.slice(0, reqShowAll ? requests.length : 12).map((r) => {
       const [cls, text] = badge[r.finish] || ["", r.finish || "–"];
       const t = new Date(r.time * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
       const proj = r.projection == null ? "" : ` <span class="st-badge${r.projection ? " st-badge--reading" : ""}" title="experimental speed projection ${r.projection ? "on" : "off"}">${r.projection ? "ESP" : "stock"}</span>`;
       const hit = r.hit_rate == null ? "–" : `${(r.hit_rate * 100).toFixed(1)}%`;
+      const out = r.finish === "rejected"
+        ? ` title="Refused: ${r.max_tokens == null ? `the prompt alone (${fmt(r.prompt_tokens)} tokens) leaves no room to answer`
+             : `asked for ${fmt(r.max_tokens)} output tokens: ${fmt(r.prompt_tokens)} + ${fmt(r.max_tokens)} is over the context`} - the server window says what to do"` : "";
       return `<tr><td>${esc(t)}</td><td><span class="st-badge ${cls}">${esc(text)}</span>${proj}</td><td class="num">${fmt(r.prompt_tokens)}</td>
-        <td class="num">${fmt(r.reused)}</td><td class="num">${fmt(r.output_tokens)}</td><td class="num">${fmt(r.decode_tok_s, 1)}</td>
+        <td class="num">${fmt(r.reused)}</td><td class="num"${out}>${fmt(r.output_tokens)}</td><td class="num">${fmt(r.decode_tok_s, 1)}</td>
         <td class="num">${hit}</td><td class="num">${fmt(r.duration_s, 1)} s</td></tr>`;
     }).join("");
   }

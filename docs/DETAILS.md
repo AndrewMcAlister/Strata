@@ -464,7 +464,12 @@ print(r.choices[0].message.content)
 - **Context.** Chosen in setup (8K-262K). Requests longer than that are refused, never silently cut. A request whose
   `max_tokens` would run past the context is refused too (400); agents that always ask for their full output cap
   can instead get it shortened to the room left: add `"fit_max_tokens": true` to `strata-<model>.json` (or pass
-  `--fit-max-tokens` to `serve/server.py`). A prompt that leaves no room at all is still refused.
+  `--fit-max-tokens` to `serve/server.py`). A prompt that leaves no room at all is still refused, and so is one that
+  is over the context on its own - `fit_max_tokens` shortens an answer, it cannot shorten a prompt - so the two
+  levers that leave room are a bigger context and a smaller client output cap. Every refusal says what to do, prints
+  `[strata] refused ...` with a breakdown (system, tools, images, largest messages) to the server window, and is
+  listed in the Monitor as a **Refused** row with the prompt's real token count; nothing reached the model, so the
+  Monitor's totals and speed cards still describe the last request that ran.
 - **Model aliases** (0.1.32). `"aliases": ["qwen", "local-model"]` in `strata-<model>.json` lists the model under
   those names too in `/v1/models` (each with its own `id`, and in the model's `aliases`), like llama-server's
   `--alias`; a request naming one is answered under that name. Any other name is still served, as before.
@@ -784,7 +789,7 @@ the document, +0.4% on the chat. Details: `bench/results/2026-09-27-esp/`.
 | The PC freezes for a few minutes at the start | Normal, most of all the first time (the server window says when it happens): the engine loads the experts into RAM, pins part of it for the GPU and sizes the expert cache. Wait; don't close the window. Still frozen after 10 minutes: restart the PC, close other programs, try again, or pick a smaller size. |
 | `the engine stopped unexpectedly (exit code ...)` | The engine process ended mid-answer - usually out of RAM (Linux ends the biggest program: `sudo dmesg \| grep -i -E 'killed process\|out of memory'`). The next request starts it again by itself. If it repeats: close other programs or pick a smaller size. The server also warns at start when the model's experts leave less than ~6 GB of RAM for everything else. |
 | Slow output, disk light busy | Not enough free RAM: close other programs, or choose Q2_0 / IQ2_XS. |
-| `prompt ... exceeds the context` | The request is longer than the context you chose: run setup again with a bigger `--context`. |
+| `prompt ... exceeds the context` or `leaves no room to answer` | The request is longer than the context you chose (the message says by how much). Both refusals name the remedy: start a new chat (usually enough for a long agent session), run setup again with a bigger `--context`, or lower the client's max output tokens. `fit_max_tokens` helps only when the prompt leaves *some* room - with none left there is no answer to shorten. The refusal is printed to the server window (`[strata] refused ...`, with a breakdown of where the prompt's tokens went) and shown in the Monitor as a **Refused** row; it never reaches the model, so it does not count in the totals. |
 | `the setup refuses --rope-scaling none for a past-trained context` | A context past the trained 262,144 needs the rotary angles rescaled (experimental rope scaling), and the setup will not configure one with the stock angles there. Let it pick (`START-HERE.bat --setup --context 393216` adds yarn and a covering factor), or pass `--rope-scaling linear` or `yarn` yourself. |
 | Slower than the tables | The monitor plugged into the GPU and other GPU programs take VRAM from the expert cache; RAM running below its rated speed (enable EXPO/XMP in the BIOS) slows the CPU half. |
 | `this server was started without the vision encoder` | The model was set up for text only: run setup again with `--vision gpu`. |

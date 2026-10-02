@@ -49,6 +49,15 @@ entries with the **same first shard**. Orca's PLE table is in shard 1. Start wit
 512-token prefill chunks; the expert cache sizes itself to available VRAM. The expert arena alone
 needs about 49.8 GiB of available system RAM, plus draft/runtime buffers and other applications.
 
+Two tensors the pack does not hold decide whether the engine starts at all: `token_embd.weight`, read from the
+`--native` shard (2-D `[2560, 248320]`, in one of the IQ encodings `is_iq()` takes), and
+`per_layer_token_embd.weight` (IQ4_NL, 160 values per row), read from `--ple-gguf`. A shard that holds neither
+makes the engine print one line and exit about a second later, which the server reports as the engine not being
+ready. `python tools/native_check.py --config <config>` reports both without starting anything, and the server
+runs the same check before the minutes of loading. An ordinary k-quant embedding is not an option there: the
+unsloth "UD" releases store `token_embd.weight` as Q6_K (their UD-Q4_K_XL files as Q8_0), which no GPU
+dequantizer in this engine handles, so those shards can be packed but cannot start it.
+
 ```json
 {
   "exe": "build/strata",
