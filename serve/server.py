@@ -287,6 +287,12 @@ KEEPALIVE_S = 10.0          # a held-back tool argument leaves the stream quiet:
 # setup) makes them post /v1/v1/messages; these two paths mean the same as the real ones. Nothing else is aliased.
 V1_V1_ALIASES = {"/v1/v1/messages": "/v1/messages", "/v1/v1/messages/count_tokens": "/v1/messages/count_tokens"}
 CTX_SLACK = 8               # `strata --serve` rejects prompt + max_new + 8 > context: keep the same margin here
+# What to do about a refusal.  Shared by the 400 the client sees and the [strata] refused line, so the two cannot
+# drift apart.  fit_max_tokens shortens an answer that has some room to start in; with none at all it cannot help.
+REMEDY_NO_ROOM = ("Start a new chat, raise the context (run setup and pick a bigger one) or lower the client's max "
+                  "output tokens; fit_max_tokens cannot help, there is no room for even one token")
+REMEDY_EXCEEDS = ("Lower max_tokens (the client's max output tokens), start a new chat, raise the context with "
+                  "setup, or set fit_max_tokens to shorten the answer to the room left")
 # The live tok/s is a rate over a window, not a mean since the first token: a mean reads ~1/elapsed at the first
 # token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.
 RATE_WINDOW_S = 2.0
@@ -4987,7 +4993,7 @@ class Service:
             self.prompts.forget(ids)
 
 
-    def prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None, cancel=None):
+    def prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None, cancel=None, api: str = ""):
         """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
         the rest of the context.  `force` (forced_call): without thinking the reply starts with it, so it ends the
         prompt; with thinking, Service.run writes it once the thinking is over."""
@@ -5017,6 +5023,7 @@ class Service:
             ids = ids + self.tok.encode(force, parse_special=True)
         self.embeddings.path = None
         self.embeddings.keys = None
+        img_tokens = 0                              # how much of the prompt is images (the refusal line says so)
         images = images_of(messages)
         ds_pics = False                                  # DeepSeek pictures (the engine's own tower): the file is already written
         if images:
@@ -5076,6 +5083,7 @@ class Service:
             if k != len(encoded):
                 raise ValueError("the prompt and its images do not match")
             ids = out
+            img_tokens = sum(c for _, c in encoded)
         ctx = self.engine.max_context
         if ctx <= 0:
             if getattr(self.engine, "starting", False):   # #344: (re)starting, not a prompt that is too long
@@ -5091,18 +5099,21 @@ class Service:
                 # A prompt refused for the context is not kept (#567): the client cannot resend it unchanged.  The
                 # other refusals (engine starting, images) keep it: the same prompt comes back and its encode is reused.
                 self.forget_prompt(encoded_ids)
+                self.refuse(api, len(ids), max_new, messages, tools, kwargs, img_tokens, "no room")
                 raise ValueError("request exceeds the context window: "
                                  f"prompt ({len(ids)} tokens) leaves no room to answer in the context "
-                                 f"({ctx}); requests are never truncated")
+                                 f"({ctx}); requests are never truncated. {REMEDY_NO_ROOM}")
             max_new = room
         elif max_new > room:
             if not self.fit_max_tokens:
                 self.forget_prompt(encoded_ids)
+                self.refuse(api, len(ids), max_new, messages, tools, kwargs, img_tokens, "over the context")
                 raise ValueError("request exceeds the context window: "
                                  f"prompt ({len(ids)} tokens) + max tokens ({max_new}) exceeds the context "
                                  f"({ctx}); requests are never truncated. Send a smaller "
                                  f"max_tokens (at most {max(0, room)} here), or add \"fit_max_tokens\": true to the "
-                                 "model's strata-<model>.json to shorten it to the room left (#545)")
+                                 "model's strata-<model>.json to shorten it to the room left (#545). "
+                                 f"{REMEDY_EXCEEDS}")
             print(f"[strata] max_tokens {max_new} shortened to {max(1, room)}: the prompt ({len(ids)} tokens) leaves that much "
                   f"of the context ({ctx}); \"fit_max_tokens\": false answers 400 instead", flush=True)
             max_new = max(1, room)          # a shorter completion beats a 400 (the default)
@@ -5222,6 +5233,61 @@ class Service:
         path, self.embeddings.path = getattr(self.embeddings, "path", None), None
         if path is not None:
             Path(path).unlink(missing_ok=True)
+
+    def refuse(self, api, prompt_tokens, requested_max, messages, tools, kwargs, img_tokens=0, reason="no room"):
+        """A request the context guard refused: say so on stdout and keep it in /metrics, so a refusal is not
+        something only the client's error message knows about.  `totals` is deliberately left alone - the model
+        read and wrote nothing, so the Monitor's averages must not count it (a zero-ms prefill would print a
+        nonsense speed); the Monitor's requests table has the row, the ring and the speed cards keep the last
+        request that really ran (serve/web/app.js)."""
+        requested = requested_max if (requested_max or 0) > 0 else None
+        asked = f", asked for {requested:,} output tokens" if requested else ", no output cap given"
+        remedy = REMEDY_NO_ROOM if reason == "no room" else REMEDY_EXCEEDS
+        print(f"[strata] refused {api or 'request'}: prompt {prompt_tokens:,} tokens{asked}, context "
+              f"{self.engine.max_context:,} ({reason}); {remedy}", flush=True)
+        detail = self.refusal_detail(messages, tools, kwargs, prompt_tokens, img_tokens)
+        if detail:
+            print(f"[strata] refused: {detail}", flush=True)
+        with self.status_lock:
+            self.history.append({
+                "projection": None, "time": time.time(), "duration_s": 0.0, "finish": "rejected",
+                "prompt_tokens": prompt_tokens, "reused": None, "output_tokens": 0, "engine_generated": None,
+                "prompt_ms": None, "decode_ms": None, "decode_tok_s": None, "hit_rate": None,
+                "ram_blobs": None, "file_blobs": None, "file_mb": None,
+                "max_tokens": requested, "reason": reason})
+        if os.environ.get("STRATA_DEBUG"):              # _debug_req runs after prepare: a refused one never gets there
+            _debug_req(api, {"max_tokens": requested}, messages, tools, requested, True, prompt_tokens)
+
+    def refusal_detail(self, messages, tools, kwargs, prompt_tokens, img_tokens=0) -> str:
+        """Where a refused prompt's tokens went: the system message, the tools block, the images (their real encoded
+        expansion, not one pad token each) and the three largest messages.  Diagnostic only - it never raises, and it
+        renders the whole conversation at most once, so refusing a huge prompt does not become the slow part."""
+        def count(msgs, tls) -> int:
+            return len(self.tok.encode(self.template.render(msgs, tools=tls, **kwargs), parse_special=True))
+
+        def chars(m) -> int:                            # a cheap weight to pick the largest messages with
+            body = m.get("content")
+            if isinstance(body, str):
+                return len(body)
+            return sum(len(p.get("text", "")) for p in (body or []) if isinstance(p, dict))
+        try:
+            parts = []
+            if messages and messages[0].get("role") == "system":
+                parts.append(f"system {count(messages[:1], None):,}")
+            if tools:
+                # prompt_tokens is the rendered-with-tools count prepare already made: the difference from the
+                # tools-less render is the tool block plus, per image, its expansion less the one pad the template
+                # leaves behind when it is not expanded
+                sans = count(messages, None)
+                parts.append(f"tools {max(0, prompt_tokens - sans - (img_tokens - len(images_of(messages)))):,}")
+            if img_tokens:
+                parts.append(f"images {img_tokens:,}")
+            top = sorted(((chars(m), i) for i, m in enumerate(messages)), reverse=True)[:3]
+            parts.append("largest: " + ", ".join(f"{messages[i].get('role')} {count([messages[i]], None):,}"
+                                                 for _, i in top))
+            return " · ".join(parts)
+        except Exception:                               # a diagnostic must never be the thing that fails
+            return ""
 
     def _note(self, n, evs, st=None, rate=None):
         with self.status_lock:
@@ -6024,7 +6090,7 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                 "Explain any gaps in the available evidence. Do not request or emit further tool calls."})
             yield "mcp", {"event": "limit", "max_rounds": max_rounds}
         try:
-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req, cancel=cancel)
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req, cancel=cancel, api="mcp")
         except ClientGone:                                      # #1999: the client left while a picture was prepared
             done = {**done, "finish": "cancel"}
             break
@@ -7681,7 +7747,7 @@ def make_handler(svc: Service):
             check_request_sampling(req)                       # ... and a sampling field of the wrong type
             cancel = threading.Event()
             self._watch_client(cancel)                       # #430 #431 (#1999: before prepare, which can take long)
-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req, cancel=cancel)
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req, cancel=cancel, api="openai")
             _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
             run = run_with_mcp(svc, svc.mcp, messages, tools, kw, ids, thinking, max_new, max_req, req, cancel,
                                {t["name"] for t in extra}) if use_mcp else None
@@ -7917,7 +7983,7 @@ def make_handler(svc: Service):
             check_request_sampling(req)                       # ... and a sampling field of the wrong type
             cancel = threading.Event()
             self._watch_client(cancel)                       # #430 #431 (#1999: before prepare, which can take long)
-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req, cancel=cancel)
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req, cancel=cancel, api="anthropic")
             _debug_req("anthropic", req, messages, tools, max_new, thinking, len(ids))
             events = anthropic_events(svc, req, ids, thinking, tools, max_new, cancel, force=force)
             events = self._capture(events, "anthropic")
