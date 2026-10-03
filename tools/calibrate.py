@@ -1,4 +1,4 @@
-"""Tune the engine's hardware-dependent settings on this PC (setup's --calibrate).
+r"""Tune the engine's hardware-dependent settings on this PC (setup's --calibrate).
 
 Three settings depend on the machine more than on the model, and the defaults are right for the PC they were
 measured on (a Ryzen 5 7600 + RTX 5070 on PCIe 5):
@@ -14,7 +14,11 @@ per value.  Decode speed only: the prompt path streams every expert whatever the
 A setting is kept only when it beats the default by more than MIN_GAIN in an interleaved re-measurement - the
 adaptive expert tier and the OS make single measurements noisy by a few percent.
 
-    python tools/calibrate.py strata-q2_0.json        # measure and print; setup.py --calibrate also saves it
+    .venv\Scripts\python tools\calibrate.py strata-q2_0.json    # Windows: measure and print
+    .venv/bin/python tools/calibrate.py strata-q2_0.json        # Linux; setup.py --calibrate saves it
+
+Use the .venv interpreter, not a bare `python` - the tokenizer imports `regex`, which is installed
+there and usually not in the system Python.
 """
 from __future__ import annotations
 
