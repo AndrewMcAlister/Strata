@@ -2,7 +2,9 @@
 rem ==============================================================================================
 rem  Strata_Start.bat - start Strata (the server and the model) from any shortcut.
 rem
-rem    Strata_Start.bat             start with the newest model config in the Strata folder
+rem    Strata_Start.bat             start a model in the Strata folder - it asks which one when
+rem                                 more than one is installed, and starts the newest otherwise
+rem    Strata_Start.bat /newest     do not ask: start the newest model config
 rem    Strata_Start.bat /window     start it in its own window and return at once
 rem    Strata_Start.bat /noopen     do not open the browser
 rem    Strata_Start.bat /restart    stop what is running first, then start it
@@ -20,6 +22,12 @@ rem  Starting twice is caught: if this folder already has a running server, this
 rem  (with the address to open) instead of failing later on a busy port.  /restart stops it first.
 rem  The same goes for a model whose server died: it still holds its memory, so it is reported
 rem  rather than loaded over.  With nothing installed yet it hands over to START-HERE.bat.
+rem
+rem  With more than one model installed this asks which one to start, because the newest config
+rem  is not necessarily the one wanted, and the choice decides what an app's model list shows.
+rem  Nothing else changes: /newest, a --config of your own, a running server, /restart or an
+rem  input that is not a console (a scheduled task, a redirect) all start without asking, and
+rem  with one model installed there is nothing to ask.
 rem
 rem  With no model installed this refuses to start rather than starting serve\server.py without
 rem  --engine, whose default there is the mock engine - that would answer like a loaded model.
@@ -46,6 +54,7 @@ set "NOOPEN="
 set "OPEN=--open"
 set "RESTART="
 set "STATUS="
+set "NEWEST="
 set "HELP="
 set "EXTRA="
 :parse
@@ -57,6 +66,7 @@ if /i "%~1"=="/window"  (set "WINDOW=1" & shift & goto parse)
 if /i "%~1"=="/fg"      (set "FOREGROUND=1" & shift & goto parse)
 if /i "%~1"=="/restart" (set "RESTART=1" & shift & goto parse)
 if /i "%~1"=="/status"  (set "STATUS=1" & shift & goto parse)
+if /i "%~1"=="/newest"  (set "NEWEST=1" & shift & goto parse)
 if /i "%~1"=="/noopen"  (set "NOOPEN=1" & set "OPEN=" & shift & goto parse)
 set "EXTRA=!EXTRA! "%~1""
 shift
@@ -182,13 +192,19 @@ rem and the pinned memory, and a new engine started beside it cannot load.
 >>"%PSFILE%" echo }
 >>"%PSFILE%" echo $cfg = JsonOf $extra
 >>"%PSFILE%" echo if ($cfg -eq '') { $cfg = JsonOf $cmdline }
+rem AUTO says the config is the fallback below and not one asked for, so it is the only case where
+rem asking which model to start is a real question.  The list is kept (newest first, the same order
+rem and the same IsConfig test as before) so the start can offer it; the newest stays the default.
+>>"%PSFILE%" echo $auto = 0
+>>"%PSFILE%" echo $configs = New-Object System.Collections.ArrayList
+>>"%PSFILE%" echo $newest = $null
 >>"%PSFILE%" echo if ($cfg -eq '') {
->>"%PSFILE%" echo     $newest = $null
 >>"%PSFILE%" echo     foreach ($f in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
 >>"%PSFILE%" echo         if (-not (IsConfig $f.FullName)) { continue }
+>>"%PSFILE%" echo         [void]$configs.Add($f)
 >>"%PSFILE%" echo         if (($newest -eq $null) -or ($f.LastWriteTime -gt $newest.LastWriteTime)) { $newest = $f }
 >>"%PSFILE%" echo     }
->>"%PSFILE%" echo     if ($newest -ne $null) { $cfg = $newest.FullName }
+>>"%PSFILE%" echo     if ($newest -ne $null) { $cfg = $newest.FullName; $auto = 1 }
 >>"%PSFILE%" echo }
 >>"%PSFILE%" echo $model = ''
 >>"%PSFILE%" echo $exe = ''
@@ -221,6 +237,44 @@ rem 8080.  8095 is the mock engine's default in serve\server.py and is not this 
 >>"%PSFILE%" echo Write-Output ('MODEL=' + $model)
 >>"%PSFILE%" echo Write-Output ('CFG=' + $cfg)
 >>"%PSFILE%" echo Write-Output ('EXE=' + $exe)
+rem Whether a person is at the console decides whether this start may ask anything at all: a
+rem scheduled task, a redirect or a closed input has nobody to answer, and set /p on those
+rem returns empty at once rather than waiting.  IsOutputRedirected is always true here (the
+rem probe's own output is captured), so it is the input side that is asked about.
+>>"%PSFILE%" echo $tty = 0
+>>"%PSFILE%" echo try { if (-not [Console]::IsInputRedirected) { $tty = 1 } } catch { $tty = 0 }
+>>"%PSFILE%" echo Write-Output ('TTY=' + $tty)
+>>"%PSFILE%" echo Write-Output ('AUTO=' + $auto)
+>>"%PSFILE%" echo Write-Output ('WANTPORT=' + $wanted)
+rem The candidates, newest first, each with what the batch needs to start it: the list line the
+rem user picks from, and the path, name, engine and port of that choice.  PORT is emitted rather
+rem than recomputed because a config whose port differs from the running one would otherwise be
+rem started on the wrong port.
+>>"%PSFILE%" echo if ($auto -eq 1) {
+>>"%PSFILE%" echo     $ordered = New-Object System.Collections.ArrayList
+>>"%PSFILE%" echo     [void]$ordered.Add($newest)
+>>"%PSFILE%" echo     foreach ($f in $configs) { if ($f.FullName -ne $newest.FullName) { [void]$ordered.Add($f) } }
+>>"%PSFILE%" echo     Write-Output ('NCFG=' + $ordered.Count)
+>>"%PSFILE%" echo     for ($i = 0; $i -lt $ordered.Count; $i++) {
+>>"%PSFILE%" echo         $k = $i + 1
+>>"%PSFILE%" echo         $p = $ordered[$i].FullName
+>>"%PSFILE%" echo         $m = ''
+>>"%PSFILE%" echo         $x = ''
+>>"%PSFILE%" echo         $jp = 0
+>>"%PSFILE%" echo         $jj = $null
+>>"%PSFILE%" echo         try { $jj = ConvertFrom-Json (Get-Content -Raw -LiteralPath $p) } catch { $jj = $null }
+>>"%PSFILE%" echo         if ($jj -ne $null) {
+>>"%PSFILE%" echo             if ($jj.model_name) { $m = [string]$jj.model_name }
+>>"%PSFILE%" echo             if ($jj.exe) { $x = [string]$jj.exe }
+>>"%PSFILE%" echo             if ($jj.port) { $jp = [int]$jj.port }
+>>"%PSFILE%" echo         }
+>>"%PSFILE%" echo         if ($m -eq '') { $m = 'strata' }
+>>"%PSFILE%" echo         Write-Output ('CFG' + $k + '=' + $p)
+>>"%PSFILE%" echo         Write-Output ('MODEL' + $k + '=' + $m)
+>>"%PSFILE%" echo         Write-Output ('EXE' + $k + '=' + $x)
+>>"%PSFILE%" echo         Write-Output ('PORT' + $k + '=' + $jp)
+>>"%PSFILE%" echo     }
+>>"%PSFILE%" echo } else { Write-Output 'NCFG=0' }
 >>"%PSFILE%" echo exit 0
 
 set "RUNNING="
@@ -230,6 +284,11 @@ set "SRVPORT="
 set "MODEL="
 set "CFG="
 set "EXE="
+set "AUTO="
+set "NCFG="
+set "TTY="
+set "WANTPORT="
+set "SEL="
 set "PSOUT=%TEMP%\strata-start-%RANDOM%.out"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -Extras "%EXFILE%" >"%PSOUT%" 2>nul
 set "PROBECODE=%ERRORLEVEL%"
@@ -242,6 +301,12 @@ if not defined ENGINE set "ENGINE=0"
 if not defined PORT set "PORT=8080"
 if not defined SRVPORT set "SRVPORT=%PORT%"
 if not defined MODEL set "MODEL=strata"
+rem An older probe, or one that answered before these were emitted, leaves no choice to offer;
+rem NCFG in particular has to be a number: for /l with an empty one is a syntax error.
+if not defined AUTO set "AUTO=0"
+if not defined NCFG set "NCFG=0"
+if not defined TTY set "TTY=0"
+if not defined WANTPORT set "WANTPORT=0"
 
 rem --- starting twice would only fail later on a busy port, so deal with it here -----------------
 rem An engine that outlived its server is the one case the server check cannot see, and it is the
@@ -252,19 +317,18 @@ if not "%RUNNING%"=="0" goto restart
 if not "%ENGINE%"=="0" goto restart
 
 rem --- the arguments for serve\server.py ---------------------------------------------------------
-rem Normally this script names the engine and the newest config itself, which is what makes a
-rem double-click on this file enough.  If --engine was given, nothing is added and the command
-rem line is exactly what was asked for.
+rem This script names the engine and the config itself, which is what makes a double-click on this
+rem file enough.  The config is appended after the choice below, not here: a line this early would
+rem carry the newest config whatever the picker then decided.  If --engine was given, nothing is
+rem added and the command line is exactly what was asked for.
 :launch
 set "ENGINEARG="
-if not "%CFG%"=="" set "ENGINEARG=--engine strata --config "%CFG%" --port %PORT%"
 rem Whether the command line brought its own --engine.  The substitution has to be guarded:
 rem with %EXTRA% empty, cmd does not treat "%EXTRA:--engine=%" as a substitution at all and
 rem leaves the literal "--engine=" behind, so the comparison below would always say "asked for
 rem one" - which is how an empty command line came to start serve\server.py's mock engine.
 set "USERTEST=%EXTRA%"
 if defined EXTRA set "USERTEST=%EXTRA:--engine=%"
-if not "%USERTEST%"=="%EXTRA%" set "ENGINEARG="
 rem With no config and no --engine of its own, serve\server.py falls back to its mock engine
 rem (that is that flag's default), which answers on 8095 as if a model were loaded: a
 rem double-click would look like a success.  Refused here, so the mock stays a deliberate
@@ -272,6 +336,51 @@ rem choice - passing --engine mock still starts it.
 if "%CFG%"=="" if "%USERTEST%"=="%EXTRA%" goto noconfig
 if defined WINDOW goto window
 
+rem --- more than one model installed: ask which one, unless something already answered that ----
+rem Everything that is not this script's own newest-config fallback has already decided: a
+rem --config of the user's own, the config of a server that is running, /restart (which restarts
+rem that same server's model), /status and the two refusals above never reach here as AUTO, and
+rem /newest asks for the old behaviour on purpose.  --engine of the user's own is checked too:
+rem with it, the command line is taken as written and the choice below would be dropped.
+if not "%AUTO%"=="1" goto banner
+if not %NCFG% gtr 1 goto banner
+if not "%TTY%"=="1" goto banner
+if not "%USERTEST%"=="%EXTRA%" goto banner
+if defined NEWEST goto banner
+
+echo.
+echo  More than one model is installed in this folder.  Choose the one to start:
+echo.
+rem The names go through delayed expansion: a percent-expanded name is expanded before cmd looks
+rem for characters that mean something to it, so a name holding one would be taken as syntax.
+rem With delayed expansion the name is already a value by then and is printed as it is.
+for /l %%i in (1,1,%NCFG%) do echo    %%i. !MODEL%%i!
+echo.
+:pickprompt
+set "SEL="
+set /p "SEL=Start which model? [1] "
+rem An input that has ended - a scheduled task, a redirect, a closed handle - makes set /p return
+rem empty immediately.  Empty is the default rather than a reason to ask again: asking again on
+rem empty input would spin here forever, printing the menu without end.
+if not defined SEL set "SEL=1"
+set "OK="
+for /l %%i in (1,1,%NCFG%) do if "!SEL!"=="%%i" set "OK=1"
+if defined OK goto picked
+echo  Enter a number from 1 to %NCFG%.
+goto pickprompt
+:picked
+rem The chosen number picks the config, and with it the name and engine the banner and the
+rem command line use.  A port given on the command line still wins over the config's own.
+set "CFG=!CFG%SEL%!"
+set "MODEL=!MODEL%SEL%!"
+set "EXE=!EXE%SEL%!"
+if "%WANTPORT%"=="0" set "PORT=!PORT%SEL%!"
+
+:banner
+rem The command line for the model that is about to be started, built from the config chosen
+rem above - the newest when nothing was asked.  It is refused when the command line carried its
+rem own --engine: that flag decides which engine runs, and the mock takes no config.
+if not "%CFG%"=="" if "%USERTEST%"=="%EXTRA%" set "ENGINEARG=--engine strata --config "%CFG%" --port %PORT%"
 echo.
 echo  Strata - %MODEL%
 echo    folder   %ROOT%
@@ -335,6 +444,7 @@ rem --- /window: hand the work to a window of its own, the shortcut gets its pro
 :window
 set "CHILDARGS=/fg"
 if defined NOOPEN set "CHILDARGS=/fg /noopen"
+if defined NEWEST set "CHILDARGS=!CHILDARGS! /newest"
 echo  Starting Strata in a window of its own.  Closing that window stops it.
 start "Strata" /D "%ROOT%" cmd /c call "%SELF%" !CHILDARGS! %EXTRA%
 exit /b 0
@@ -366,7 +476,8 @@ rem --- what to say when something that must be there is not -------------------
 echo.
 echo  Strata_Start.bat - start Strata (the server and the model) from any shortcut
 echo.
-echo    Strata_Start.bat             start with the newest model config in the Strata folder
+echo    Strata_Start.bat             start a model - asks which one when more than one is installed
+echo    Strata_Start.bat /newest     do not ask: start the newest model config
 echo    Strata_Start.bat /window     start it in its own window and return at once
 echo    Strata_Start.bat /noopen     do not open the browser
 echo    Strata_Start.bat /restart    stop what is running first, then start it
@@ -378,9 +489,14 @@ echo  This file may sit anywhere in the Strata folder: next to START-HERE.bat, i
 echo  .venv\Scripts\.  It finds the Strata folder by walking up from its own location until it
 echo  sees serve\server.py, so a shortcut to it works from any working directory.
 echo.
-echo  The newest strata-*.json in the Strata folder is the model that is started.  The Chat
-echo  settings saved beside a config (strata-MODEL.shared-settings.json) are not a config and
-echo  are ignored, as is any file without an engine path and arguments in it.
+echo  The strata-*.json files in the Strata folder are the installed models.  With more than one,
+echo  a start lists them and asks which to load; pressing Enter takes the first, which is the
+echo  newest.  /newest skips the question, and so does a --config of your own, a server that is
+echo  already running, and any start whose input is not a console (a scheduled task, a redirect).
+echo  Nothing is asked when only one model is installed.
+echo.
+echo  The Chat settings saved beside a config (strata-MODEL.shared-settings.json) are not a
+echo  config and are ignored, as is any file without an engine path and arguments in it.
 echo.
 echo  --engine mock starts serve\server.py's scripted stand-in engine, which needs no model.
 echo  Without a config and without --engine this script refuses to start instead of falling back
