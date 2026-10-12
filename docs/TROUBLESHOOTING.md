@@ -135,6 +135,19 @@ setup warns when it finds 13.2.0 or 13.2.1 for such a card, and takes an older 1
 `--vision gpu` (or `--vision cpu`). Pictures that take several seconds (about 3 s at 300 image tokens on 8 cores, more with more tokens) are read by the encoder on the CPU; `--vision gpu`
 (NVIDIA, ~1.4 GB of VRAM) makes it 0.1-0.5 s.
 
+**An app says the model was not found after I switched to another size (LM Studio Code).**
+The app reads Strata's model list once, when its own engine starts, and keeps it: with the `_s` server answering
+`GET /v1/models` with `qwen3.8-flash-next-iq3_s` alone, an app whose engine started while `_xxs` was loaded still
+checks every request against the names it read then. It refuses with `ProviderModelNotFoundError: Model not found:
+lmstudio/qwen3.8-flash-next-iq3_s. Did you mean: qwen3.8-flash-next-iq3_xxs?` (measured on LM Studio Code 0.30.1,
+Windows, 2026-10-12); neither log shows the request leaving the app - Strata's own `strata-iq3_s.log` stayed clean
+(9 engine starts, no refusal, no request under that name) - though Strata answers any name: a request naming
+`qwen3.8-flash-next-iq3_xxs` sent to the running `_s` server came back 200, answered under
+`qwen3.8-flash-next-iq3_s`. Restart the app's engine after switching: `Ctrl+Shift+P` > `LM Studio Code: Restart
+OpenCode Server`, then pick the model again (reloading the window does it too). Instead, you can list the name the
+app still has in `strata-iq3_s.json`: `"aliases": ["qwen3.8-flash-next-iq3_xxs"]` - `/v1/models` then shows both
+names and nothing goes stale, but the list no longer says which size is loaded.
+
 ## AMD cards
 
 **"No AMD GPU found (the amdgpu driver's KFD topology is empty)" on Linux.**
