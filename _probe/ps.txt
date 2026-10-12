@@ -1,0 +1,35 @@
+﻿=== shortcut
+exists=True
+TargetPath=D:\Strata\Scripts\Strata_Start.bat
+Arguments=
+WorkingDirectory=D:\Strata\Scripts
+=== stop shortcut
+TargetPath=D:\Strata\Scripts\Strata_Stop.bat
+Arguments=
+WorkingDirectory=D:\Strata\Scripts
+=== startup folder
+=== scheduled tasks with strata
+=== engine dir
+BUILD.json 213
+strata-vision.exe 90725376
+strata.exe 104152576
+=== data root
+models 1
+mtp 1
+packs 1
+xcheck 1
+xres 1
+-- models
+IQ2_XS
+IQ3_S
+IQ3_XXS
+mmproj-Qwen3.8-Flash-Next-BF16.gguf
+mmproj-Qwen3.8-Flash-Next-BF16.gguf.done
+-- packs
+iq2_xs
+iq3_s
+iq3_xxs
+iq3_xxs-ud
+=== nvidia-smi
+=== running strata processes
+58916 strata D:\Strata\engine\strata.exe
