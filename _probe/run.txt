@@ -1,0 +1,51 @@
+﻿=== cmdlines
+45568 :: D:\McTrader\.venv\Scripts\python.exe  -m uvicorn api.mc_trader_controller:app --host 127.0.0.1 --port 8000 --log-level info
+56960 :: "C:\Users\AndrewBot\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\python.exe"   -m uvicorn api.mc_trader_controller:app --host 127.0.0.1 --port 8000 --log-level info
+45700 :: D:\McTrader\.venv\Scripts\python.exe  -m mcp_server.server
+36012 :: "C:\Users\AndrewBot\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\python.exe"   -m mcp_server.server
+39928 :: D:\McTrader\.venv\Scripts\python.exe  -u -m root.deep_seek_scheduler
+53988 :: "C:\Users\AndrewBot\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\python.exe"   -u -m root.deep_seek_scheduler
+33736 :: "D:\Strata\.venv\Scripts\python.exe"  "D:\Strata\serve\server.py" --engine strata --config "D:\Strata\strata-iq3_s.json" --port 8080 --open 
+58600 :: "C:\Users\AndrewBot\AppData\Local\Programs\Python\Python312\python.exe" "D:\Strata\serve\server.py" --engine strata --config "D:\Strata\strata-iq3_s.json" --port 8080 --open 
+58916 :: D:\Strata\engine\strata.exe --serve --pack D:\Strata-data\packs\iq3_s --native D:\Strata-data\models\IQ3_S\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf --ple-gguf D:\Strata-data\models\IQ3_S\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf --expert-profile D:\Strata\data\expert-profile.bin --expert-cache auto --prefill auto --spec 4 --spec-min-p 0.5 --mtp D:\Strata-data\mtp\rt --max-context 131072 --kv int8 --kv-resident 32768 --control-vector-scaled D:\Strata\data\experimental-speed-projection\Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer --vram-reserve-mib 700
+=== vision lines in logs
+strata-iq3_xxs.log:15313: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:15314: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:15317: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:15354: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:15355: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:15358: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:15445: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:15446: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:15449: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:15517: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:15518: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:15521: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:15724: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:15725: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:15728: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:17151: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:17152: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:17155: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:17219: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:17220: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:17223: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:17227: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:17228: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:17231: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:23501: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:23502: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:23505: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:60051: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:60052: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:60055: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:60063: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:60064: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:60067: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:60097: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:60098: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:60101: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:60144: load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+strata-iq3_xxs.log:60145: load_hparams: if you encounter problems with accuracy, try adding --image-min-tokens 1024
+strata-iq3_xxs.log:60148: strata-vision: warmed up at 1024 image tokens
+strata-iq3_xxs.log:60149: [strata] 2026-10-12 18:35:26 engine started: D:\Strata\engine\strata.exe --serve --pack D:\Strata-data\packs\iq3_xxs --native D:\Strata-data\models\IQ3_XXS\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf --ple-gguf D:\Strata-data\models\IQ3_XXS\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf --expert-profile D:\Strata\data\expert-profile.bin --expert-cache auto --prefill auto --spec 4 --spec-min-p 0.5 --mtp D:\Strata-data\mtp\rt --max-context 131072 --kv int8 --kv-resident 32768 --vision --vram-reserve-mib 700

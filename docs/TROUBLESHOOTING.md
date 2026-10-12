@@ -147,6 +147,14 @@ Windows, 2026-10-12); neither log shows the request leaving the app - Strata's o
 OpenCode Server`, then pick the model again (reloading the window does it too). Instead, you can list the name the
 app still has in `strata-iq3_s.json`: `"aliases": ["qwen3.8-flash-next-iq3_xxs"]` - `/v1/models` then shows both
 names and nothing goes stale, but the list no longer says which size is loaded.
+The picker reads its list fresh, so it can offer a size the running engine had never heard of; only a restart rebuilds
+what the engine checks against, and what it holds is readable: `GET /config/providers` on the OpenCode server's port
+(the extension picks one, 4096 here) prints the model map - on the PC above, with the `_s` server answering
+`qwen3.8-flash-next-iq3_s`, an OpenCode server started before the switch still listed `qwen3.8-flash-next-iq3_xxs`
+alone. Set `lmstudioCode.defaultModel` to the model's id (`qwen3.8-flash-next-iq3_s`), not to a model file's name:
+the extension matches that setting against the ids and, when nothing matches (`Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S`
+matched nothing on that PC, so the panel fell back to whichever size was loaded when its engine started), the switch
+to another size is the one it refuses.
 
 ## AMD cards
 
