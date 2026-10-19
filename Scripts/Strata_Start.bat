@@ -357,12 +357,33 @@ rem With delayed expansion the name is already a value by then and is printed as
 for /l %%i in (1,1,%NCFG%) do echo    %%i. !MODEL%%i!
 echo.
 :pickprompt
+rem A TIMED prompt. set /p waits for ever, which is wrong here twice over: a start at
+rem logon has nobody watching it, and a start from a shortcut that is ignored would hold
+rem the console open indefinitely. choice /t returns after ten seconds with the default,
+rem which is the model without --vision (see the DEF block below): vision loads a second
+rem engine and a 900 MB projector, VRAM an unattended start does not need, and the models
+rem that keep vision stay selectable. ORDER IS STILL NEWEST-FIRST, so the numbering can
+rem change; the default follows the property rather than the number.
+rem WHAT THE DEFAULT IS comes from Strata_DefaultModel.ps1, not from a number written
+rem here. That script prints the position of the first model without --vision, in the same
+rem newest-first order this script lists. A hardcoded 2 was correct until the config meant
+rem to be 2 was edited - which made it newest, moved it to 1, and pointed the default at a
+rem vision model instead. A position is a fact about the clock; this is a fact about the model.
+set "DEF="
+if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
+  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%"`) do set "DEF=%%A"
+)
+if not defined DEF set "DEF=1"
+rem The key set is built from NCFG so choice can only accept a number that exists.
+set "KEYS="
+for /l %%i in (1,1,%NCFG%) do set "KEYS=!KEYS!%%i"
 set "SEL="
-set /p "SEL=Start which model? [1] "
-rem An input that has ended - a scheduled task, a redirect, a closed handle - makes set /p return
-rem empty immediately.  Empty is the default rather than a reason to ask again: asking again on
-rem empty input would spin here forever, printing the menu without end.
-if not defined SEL set "SEL=1"
+choice /c !KEYS! /n /t 10 /d !DEF! /m "Start which model? [!DEF!, default in 10 seconds] "
+set "SEL=!ERRORLEVEL!"
+rem `choice` always answers, so SEL is always set; these lines stay as a guard for an
+rem older probe that emitted no NCFG, and for the Ctrl+C case where choice returns 0.
+if not defined SEL set "SEL=!DEF!"
+if "!SEL!"=="0" set "SEL=!DEF!"
 set "OK="
 for /l %%i in (1,1,%NCFG%) do if "!SEL!"=="%%i" set "OK=1"
 if defined OK goto picked
