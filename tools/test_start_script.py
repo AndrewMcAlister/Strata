@@ -5,7 +5,7 @@ PowerShell probe it writes at run time, so there is nothing importable to call. 
 the script's text instead - the same thing test_setup_strix_halo.py does for build_windows.bat -
 and check the things whose getting wrong is silent: a picker that is reached before the config is
 appended, a menu printed with percent expansion (a model name holding & becomes a command), a
-`set /p` that asks again on ended input and spins, and the gates that keep a scheduled task or a
+cancelled `choice` that answers 0, and the gates that keep a scheduled task or a
 single-model install from ever being asked anything.
 
 Verified by hand beyond these, on Windows, three configs installed: the menu appears and picks;
@@ -80,14 +80,14 @@ class StrataStart(unittest.TestCase):
         self.assertGreater(line_of(r"echo    %%i. !MODEL%%i!"), -1)
         self.assertEqual(line_of("echo    %%i. %MODEL%%i%"), -1)
 
-    def test_ended_input_takes_the_default_instead_of_asking_again(self):
-        """set /p returns empty at once when the input has ended (a scheduled task, a redirect, a closed
-        handle).  Asking again on empty would spin, printing the menu without end."""
-        read = line_of('set /p "SEL=Start which model? [1] "')
-        default = line_of('if not defined SEL set "SEL=1"')
-        self.assertGreater(read, -1)
-        self.assertGreater(default, read)                                 # the read happens first
-        self.assertLess(default, line_of("if defined OK goto picked"))    # and the default is a valid answer
+    def test_a_cancelled_choice_takes_the_default(self):
+        """`choice` returns 0 on Ctrl+C and on an ended input; the guard turns that into the default
+        instead of an invalid answer, and an undefined SEL still falls back to DEF."""
+        fallback = line_of('if not defined SEL set "SEL=!DEF!"')
+        cancelled = line_of('if "!SEL!"=="0" set "SEL=!DEF!"')
+        self.assertGreater(fallback, -1)
+        self.assertGreater(cancelled, fallback)
+        self.assertLess(cancelled, line_of('for /l %%i in (1,1,%NCFG%) do if "!SEL!"=="%%i" set "OK=1"'))
 
     def test_a_wrong_answer_is_asked_for_again(self):
         self.assertGreater(line_of('echo  Enter a number from 1 to %NCFG%.'), -1)

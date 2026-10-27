@@ -148,31 +148,6 @@ Follow the prompts to download and start a model. [Terminal guide](docs/TERMINAL
 
 <a id="what-you-need"></a>
 
-**Starting and stopping it.** `START-HERE.bat` starts the model, and to stop it there are two scripts in `Scripts\`:
-`Strata_Start.bat` and `Strata_Stop.bat`. They do the same as `START-HERE.bat`, but start from either side of a
-running model, so make a Desktop shortcut to each if you want them a double-click away (right-click the file, *Send
-to*, *Desktop*). Both find Strata from wherever they are, so a shortcut works from any working directory, and a start
-with no model installed says so instead of starting an empty server.
-
-- `Strata_Start.bat` starts a model in the folder. With more than one `strata-*.json` installed it lists them and
-  asks which to load, because what is running is what an app's model list shows; pressing Enter takes the newest,
-  which is what it started without asking before. `/newest` skips the question, and so does a `--config` of your
-  own, a server that is already running, and any start whose input is not a console - a scheduled task or a
-  redirected run never waits for an answer. It also takes `/restart` (stop what is running, then start it),
-  `/status` (say what is running, change nothing), `/window` (its own window, so the shortcut gets its prompt back)
-  and `/noopen` (do not open the browser). Anything else goes to the server, as in `Strata_Start.bat --gpu 1`.
-  `/restart` restarts the model that is running; to load a different one, stop first
-  (`Strata_Stop.bat`), then start and pick. Only one model fits in memory at a time, so an app's dropdown can only
-  ever offer the one that is loaded.
-- `Strata_Stop.bat` stops the server and the model. It kills the server first, which closes the engine's input: the
-  model then leaves its serve loop by itself and gives the RAM and the locked VRAM back. That takes a few seconds for
-  a big model; `/force` does not wait for it, `/timeout N` changes how long it waits (60 s), and `/status` says what
-  is running without changing anything.
-
-Starting twice is caught rather than failing on a busy port: the second start says what is already running and prints
-the address. The same goes for a model whose server died - it still holds its memory, so it is reported instead of
-being loaded over.
-
 ## Hardware
 
 | Supported hardware | Guide |
