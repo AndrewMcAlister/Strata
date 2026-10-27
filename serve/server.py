@@ -7195,6 +7195,10 @@ def make_handler(svc: Service):
                     # the chat's svg/html preview is a sandboxed frame; this keeps it from navigating away to a web page
                     # (a link or <meta refresh> inside a model's html), which no sandbox flag does (serve/web/preview.js)
                     self.send_header("Content-Security-Policy", PAGE_CSP)
+                # No caching: a browser that kept an older page for this URL (llama.cpp's web UI served
+                # here before Strata) showed it until a hard reload. The HTML names the hashed assets, so
+                # a cached copy is also the one thing a normal reload must never reuse.
+                self.send_header("Cache-Control", "no-cache")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -9345,7 +9349,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         # on its own thread: webbrowser.open waits for the browser launcher, which on Linux can run for as long as
         # the browser does, and the main thread must be free to take Ctrl+C and SIGTERM (#1872)
         threading.Thread(target=webbrowser.open, daemon=True, name="strata-open-browser",
-                         args=(f"http://{here}:{bound_port}/",)).start()
+                         args=(f"http://{here}:{bound_port}/?open={int(time.time())}#monitor",)).start()
     if ready_path is not None or event_sink is not None:
         ready_host = f"[{here}]" if ":" in here and not here.startswith("[") else here
         record = {"schema_version": 1, "instance_id": svc.instance_id, "pid": os.getpid(),
