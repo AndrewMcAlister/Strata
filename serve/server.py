@@ -55,7 +55,7 @@ from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator, Protocol
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -86,6 +86,7 @@ from serve.structured import StructuredOutputError, prepare_format, validated_js
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
 from serve import images as images_api  # noqa: E402
+from serve.prompt_blocks import BlockError, PromptBlocks, check_key  # noqa: E402
 
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
@@ -860,6 +861,11 @@ def conversation_cache_view(info: dict, hist: list, totals: dict, parked: dict) 
             "reused_tokens": totals.get("reused", 0), "prompt_tokens": totals.get("prompt_tokens", 0),
             "last_reused": last.get("reused") if last else None,
             "last_prompt": last.get("prompt_tokens") if last else None}
+
+
+def short_name(name: str, n: int = 32) -> str:
+    """A cache_system / cache_client name as a log line shows it: a client's opaque string, kept short."""
+    return name if len(name) <= n else name[:n] + "..."
 
 
 _BTRACE = bool(os.environ.get("STRATA_BATCH_TRACE"))
@@ -4008,6 +4014,11 @@ class Service:
         # turn before the answer instead of the top of the prompt, so switching it keeps the cached conversation
         self.effort_end = False
         self.conv_log = ConvCacheLog()                  # #596: the parked conversations, from the engine's log
+        # fork: cache_system / cache_client names, and what each one pinned (GET /metrics' cache_ids)
+        self.cache_ids: dict[str, dict] = {}
+        self.cache_id_lock = threading.Lock()
+        # fork: named prompt blocks - text stored once by name and expanded into prompts (serve/prompt_blocks.py)
+        self.blocks = PromptBlocks()
         self.config_path = None                         # #564: the run config the web page's Settings view edits
         self.config_lock = threading.Lock()
         # #321: browser pages of these origins may call /v1/* (CORS; "*" = any page - only with an api_key that
@@ -4816,6 +4827,8 @@ class Service:
         parked = self.conv_log.poll(getattr(self.engine, "log_path", None), getattr(self.engine, "log_start", None))
         return {"engine": engine, "live": live, "requests": hist[::-1][:None if all_requests else 12],
                 "conversation_cache": conversation_cache_view(engine, hist, totals, parked),
+                "cache_ids": self.cache_id_view(),
+                "prompt_blocks": self.blocks.view(),
                 "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now}
@@ -5018,6 +5031,10 @@ class Service:
                     else:
                         part["source"] = str(image)
         fetched = self._note_unreadable_tool_images(messages, cancel)
+        # fork: {{cache:KEY}} -> the block's text, in place, before anything renders the messages.  A block that is not
+        # stored raises BlockError (a 400): the placeholder as literal text would reach the model as a strange token
+        # run, and the client would never learn that its card did not arrive.
+        blocks = self.blocks.expand(messages)
         ids = encoded_ids = self.encode_prompt(messages, tools, kwargs)
         if force and kwargs.get("enable_thinking", True) is False:
             ids = ids + self.tok.encode(force, parse_special=True)
@@ -5128,12 +5145,15 @@ class Service:
             # (an encoder restart, the cache's eviction) with other bits still matches its checkpoints
             self.embeddings.keys = [Path(p).stem[:16] for p, _ in encoded]
             write_temporary(combined, [p for p, _ in encoded])
+        cache_seen = self.note_cache_ids(req, messages, bool(images), blocks) if req is not None else None
         if self.family == "deepseek41" and req is not None and req.get("strata_prefix") is None and not images and not ds_pics:
             lead = self.deepseek_shared_start(messages)
             if lead:
                 req["strata_prefix"] = {"messages": lead}
         if req is not None and req.get("strata_prefix") is not None:
             req["strata_prefix"] = self.resolve_prefix(req["strata_prefix"], messages, tools, kwargs, ids, bool(images) or ds_pics)
+        if cache_seen is not None:
+            self.record_cache_ids(cache_seen, req.get("strata_prefix"), len(ids))
         return ids, kwargs.get("enable_thinking", True) is not False, max_new
 
     @staticmethod
@@ -5225,6 +5245,123 @@ class Service:
                   f"(common start {n})", flush=True)
             return {}
         return {"tokens": n}
+
+    CACHE_ID_MAX = 200      # a cache_system / cache_client name: room for a UUID, never a prompt
+
+    def cache_id(self, req, key) -> str | None:
+        """One `cache_system` / `cache_client` value (fork): a short opaque name, or None when the field is absent.
+        Anything else is a 400, as a malformed strata_prefix is: a client's typo should not quietly cache nothing."""
+        v = req.get(key)
+        if v is None:
+            return None
+        if (not isinstance(v, str) or not v.strip() or len(v) > self.CACHE_ID_MAX or
+                any(c.isspace() for c in v)):
+            raise ValueError(f'{key}: a name of 1 to {self.CACHE_ID_MAX} characters without spaces, e.g. '
+                             f'"shared-start-a" or "client-a73ce89e5f2e46d"')
+        return v
+
+    def note_cache_ids(self, req, messages, has_images=False, blocks=()):
+        """`cache_system` / `cache_client` (fork): the names a client gives the shared start of its prompts and its own
+        conversation.  A named start is what every request behind that name has in common, so it is marked as
+        strata_prefix={"messages": K} (resolved just below to pin=N, which only the text decides): the engine keeps a
+        pinned checkpoint there, and a parked conversation holding it stays parked, so another client behind the same
+        start - and this one's next turn - does not read it again.  `cache_client` is the conversation's name; the
+        conversation cache matches a conversation by its tokens, not its name, so nothing is sent to the engine for it:
+        it names the client in /metrics.  A request with neither field is untouched.
+
+        With prompt blocks (serve/prompt_blocks.py) the boundary is exact instead of guessed from the roles: `cache_pin`
+        names the block that ends the shared start, and `cache_system` does the same when its name is a block in the
+        prompt.  That matters when a block the request alone uses follows the shared one in the same message: the
+        system-message rule would pin past it, at a boundary only one client shares.  `blocks` is what expand() found,
+        as (key, message index, characters into that message where the block ends).
+        Returns what record_cache_ids() counts, or None."""
+        sys_id = self.cache_id(req, "cache_system")
+        cli_id = self.cache_id(req, "cache_client")
+        named = None if has_images else self.block_pin(req, blocks)
+        if named is not None and sys_id is None:
+            sys_id = named[1]                     # cache_pin alone names the shared start
+        if sys_id is None and cli_id is None and named is None:
+            return None
+        lead = 0
+        for m in messages:
+            if not isinstance(m, dict) or m.get("role") not in ("system", "developer"):
+                break
+            lead += 1
+        marked = False
+        if sys_id is not None and not has_images and req.get("strata_prefix") is None:
+            if named is not None:
+                req["strata_prefix"] = {"message": named[0][1], "chars": named[0][2]}
+                marked = True
+            elif lead:
+                req["strata_prefix"] = {"messages": lead}       # an explicit strata_prefix of the client's wins
+                marked = True
+        return sys_id, cli_id, marked, lead
+
+    def block_pin(self, req, blocks):
+        """The block a request names as the end of its shared start (fork): `cache_pin` names a block that must be in
+        the prompt (a typo is a 400 - pinning nothing would be silently slower), `cache_system` names one when it is a
+        block in the prompt.  Returns ((key, message, chars), name) or None; the last copy of the block wins, as the
+        deepest one is the longest prefix."""
+        for field, must in (("cache_pin", True), ("cache_system", False)):
+            name = self.cache_id(req, field)
+            if name is None:
+                continue
+            found = [hit for hit in blocks if hit[0] == name]
+            if not found:
+                if must:
+                    raise ValueError(f'cache_pin: {name!r} is not a cache block in this prompt (a message refers to one '
+                                     f'as "{{{{cache:{name}}}}}", and the text messages are what can be pinned); '
+                                     f"GET /cache lists the stored blocks")
+                continue
+            return found[-1], name
+        return None
+
+    def record_cache_ids(self, seen, prefix, prompt_tokens: int) -> None:
+        """Count one request that carried cache_system / cache_client, and say once what it pinned: on the first
+        request a name appears on, and when a system prompt's length changes (the card was edited - every cached copy
+        of it is now a miss)."""
+        sys_id, cli_id, marked, lead = seen
+        pin = prefix.get("tokens") if marked and isinstance(prefix, dict) else None
+        now = time.time()
+        new_sys, was, pin_changed = False, None, False
+        with self.cache_id_lock:
+            if sys_id is not None:
+                key = f"system:{sys_id}"
+                rec = self.cache_ids.pop(key, None)
+                new_sys = rec is None
+                rec = rec or {"name": sys_id, "kind": "system", "requests": 0, "pinned_tokens": None}
+                was = rec.get("pinned_tokens")
+                pin_changed = pin is not None and was is not None and was != pin
+                if pin is not None:
+                    rec["pinned_tokens"] = pin
+                rec["requests"] += 1
+                rec["last"], rec["last_prompt"] = now, prompt_tokens
+                self.cache_ids[key] = rec
+            if cli_id is not None:
+                key = f"client:{cli_id}"
+                rec = self.cache_ids.pop(key, None)
+                rec = rec or {"name": cli_id, "kind": "client", "requests": 0}
+                rec["requests"] += 1
+                rec["last"], rec["last_prompt"] = now, prompt_tokens
+                self.cache_ids[key] = rec
+            while len(self.cache_ids) > 64:         # names come from clients: never let them grow without end
+                self.cache_ids.pop(next(iter(self.cache_ids)))
+        if sys_id is not None and new_sys:
+            plural = "s" if lead != 1 else ""
+            print(f"[strata] cache_system {short_name(sys_id)}: " + (
+                f"the first {pin} tokens are the shared start ({lead} system message{plural})" if pin else
+                "not pinned: the prompt does not start with a system message, the request has images, "
+                "or it names a strata_prefix of its own"), flush=True)
+        elif pin_changed:
+            print(f"[strata] cache_system {short_name(sys_id)}: the system prompt is now {pin} tokens (it was {was}): "
+                  "the cached copies of the old one are misses", flush=True)
+
+    def cache_id_view(self) -> dict:
+        """GET /metrics' cache_ids: the names seen, the one used last first (at most 16)."""
+        with self.cache_id_lock:
+            items = sorted(self.cache_ids.values(), key=lambda r: r.get("last") or 0, reverse=True)[:16]
+            return {kind: [{k: v for k, v in r.items() if k != "kind"} for r in items if r["kind"] == kind]
+                    for kind in ("system", "client")}
 
     def drop_embeddings(self) -> None:
         """Delete the combined image file prepare() wrote when no run() took it over (a run deletes its own as it
@@ -6825,9 +6962,11 @@ def make_handler(svc: Service):
                     self.record.update(values)
 
         def _cors(self):
-            """#321: CORS headers for an API path (/v1/*) and an origin the config lists in cors_origins - nothing
-            otherwise, so a browser keeps every other page away from the API, /settings, /unload and the MCP tools."""
-            if not svc.cors_origins or not self.path.split("?")[0].startswith("/v1/"):
+            """#321: CORS headers for an API path (/v1/*, and the fork's /cache) and an origin the config lists in
+            cors_origins - nothing otherwise, so a browser keeps every other page away from the API, /settings,
+            /unload and the MCP tools."""
+            path = self.path.split("?")[0].rstrip("/")
+            if not svc.cors_origins or not (path.startswith("/v1/") or path == "/cache" or path.startswith("/cache/")):
                 return
             origin = (self.headers.get("Origin") or "").rstrip("/")
             if "*" in svc.cors_origins:
@@ -6965,6 +7104,19 @@ def make_handler(svc: Service):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path == "/cache" or path.startswith("/cache/"):
+                if not self._authorized():
+                    return
+                # a GET carries no content type, so _foreign_page's JSON rule does not fit: the Origin alone decides
+                origin = self.headers.get("Origin")
+                if (origin and not svc.api_key and
+                        not origin_allowed(origin, self.headers.get("Host"), svc.host_names,
+                                           [*svc.trusted_origins, *svc.cors_origins])):
+                    self._json(403, {"error": {"message": f"web pages of {origin} may not read this server without an "
+                                                          f"API key; add its origin to \"cors_origins\" in the config"}})
+                    return
+                self._cache_get(path)
                 return
             if path == "/metrics/prometheus":
                 if self._authorized():
@@ -7293,6 +7445,11 @@ def make_handler(svc: Service):
             path = V1_V1_ALIASES.get(path, path)         # an Anthropic client given ".../v1" as its base posts /v1/v1/messages
             if path.startswith("/v1/") and self._foreign_page():
                 return
+            if path == "/cache":                         # fork: named prompt blocks (serve/prompt_blocks.py)
+                if self._foreign_page():
+                    return
+                self._cache_post()
+                return
             if path == "/settings":
                 self._settings()
                 return
@@ -7562,6 +7719,45 @@ def make_handler(svc: Service):
             if not complete:
                 self._json(400, {"error": {"message": "incomplete control request body"}})
             return complete
+
+        def _cache_get(self, path):
+            """GET /cache (each block's name, size and Strata's own times - never its text) and GET /cache/<key> (one
+            block's text).  The fork's prompt blocks: serve/prompt_blocks.py."""
+            if path == "/cache":
+                self._json(200, svc.blocks.view())
+                return
+            try:
+                entry = svc.blocks.entry(unquote(path[len("/cache/"):]))
+            except BlockError as e:
+                self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+                return
+            if entry is None:
+                self._json(404, {"error": {"message": "no cache block with that name (GET /cache lists them)"}})
+                return
+            self._json(200, entry)
+
+        def _cache_post(self):
+            """POST /cache {"key", "value"} stores a block, {"key", "delete": true} removes one.  The fork's prompt
+            blocks (serve/prompt_blocks.py).  A value is text a prompt carries, so it is never logged: the log line
+            holds the name, the size and the store's totals."""
+            body = self._body()
+            try:
+                req = json.loads(body or b"{}")
+                if not isinstance(req, dict):
+                    raise BlockError('send {"key": "...", "value": "..."}')
+                key = check_key(req.get("key"))
+                if req.get("delete") is True:
+                    gone = svc.blocks.remove(key)
+                    self._json(200 if gone else 404, {"key": key, "deleted": gone})
+                    return
+                stored = svc.blocks.put(key, req.get("value"))
+            except ValueError as e:                    # BlockError, and json's own (a body that is not JSON)
+                self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+                return
+            view = svc.blocks.view(0)
+            print(f"[strata] cache block {short_name(stored['key'])}: {stored['bytes']} bytes stored ({view['count']} "
+                  f"block{'s' if view['count'] != 1 else ''}, {view['bytes']} bytes in all)", flush=True)
+            self._json(200, stored)
 
         def _own_page(self, what) -> bool:
             """Only JSON (a form or a "simple" cross-site request can't send it without a CORS preflight, which this
@@ -7971,6 +8167,7 @@ def make_handler(svc: Service):
             messages, tools, kw = anthropic_to_messages(req, svc.anthropic_think_unasked)
             stop_strings(req)                                 # the same 400 as the request itself would get
             check_request_sampling(req)                       # ... likewise a sampling field of the wrong type
+            svc.blocks.expand(messages)                       # fork: {{cache:KEY}} counts as the text it stands for
             self._json(200, {"input_tokens": len(svc.encode_prompt(messages, tools, kw, store=False))})
 
         def _anthropic(self, req):
@@ -9213,6 +9410,15 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
               "use it); set one, or leave api_key out", file=sys.stderr, flush=True)
     svc.cors_origins = origins_of(cfg.get("cors_origins"), "cors_origins", wildcard=True)
     svc.trusted_origins = origins_of(cfg.get("trusted_origins"), "trusted_origins", wildcard=False)
+    try:                                                     # fork: named prompt blocks (serve/prompt_blocks.py)
+        svc.blocks = PromptBlocks.from_config(cfg.get("prompt_blocks"))
+    except ValueError as e:
+        raise SystemExit(f"[strata] config {e}")
+    if cfg.get("prompt_blocks"):
+        _pb = svc.blocks.view(0)
+        print(f"[strata] prompt blocks on: up to {_pb['max_bytes'] >> 20} MiB in {_pb['max_entries']} blocks, the one "
+              "used longest ago evicted first (POST /cache, GET /cache; a prompt refers to one as {{cache:NAME}})",
+              flush=True)
     try:
         svc.allowed_hosts = allowed_hosts_of(cfg.get("allowed_hosts"), os.environ.get("STRATA_ALLOWED_HOSTS", ""))
     except ValueError as e:

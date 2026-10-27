@@ -1812,6 +1812,284 @@ class SharedPrefix(unittest.TestCase):
         self.assertEqual(ids, self.svc.prepare(self.MSGS, None, {}, 16)[0])
 
 
+class CacheIds(unittest.TestCase):
+    """Fork: "cache_system" names a character's card (the system prompt), "cache_client" names one client's
+    conversation.  The card is marked as the shared prefix, so the engine pins a checkpoint at its end; the client's
+    name changes nothing on the wire - the engine matches a conversation by its tokens - and shows in /metrics."""
+
+    @classmethod
+    def setUpClass(cls):
+        tok = ByteTokenizer()
+        cls.svc = Service(MockEngine(tok, "ok", max_context=CTX), tok,
+                          ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        cls.tok = tok
+
+    MSGS = [{"role": "system", "content": "You are Mira, a character. " * 30},
+            {"role": "user", "content": "Hello"}]
+
+    def keys(self, **sampling):
+        return StrataEngine.sampling_keys(sampling).split()
+
+    def test_the_card_is_pinned_at_its_end(self):
+        req = {"cache_system": "character-mira"}
+        ids, _, _ = self.svc.prepare(self.MSGS, None, {}, 16, req=req)
+        n = req["strata_prefix"]["tokens"]
+        self.assertGreater(n, 1)
+        self.assertIn(f"pin={n}", self.keys(**req))                 # what run() sends the engine
+        self.assertTrue(self.tok.decode(ids[:n]).strip().endswith("<|im_end|>"))
+        self.assertEqual(self.tok.decode(ids[n:n + 1]), "<|im_start|>")
+
+    def test_a_client_name_alone_sends_nothing(self):
+        req = {"cache_client": "client-a73ce89e5f2e46d"}
+        ids, _, _ = self.svc.prepare(self.MSGS, None, {}, 16, req=req)
+        self.assertEqual(req, {"cache_client": "client-a73ce89e5f2e46d"})
+        self.assertFalse([k for k in self.keys(**req) if k.startswith("pin=")])
+        self.assertEqual(ids, self.svc.prepare(self.MSGS, None, {}, 16)[0])
+
+    def test_the_clients_own_prefix_wins(self):
+        req = {"cache_system": "character-mira", "strata_prefix": {"tokens": 5}}
+        self.svc.prepare(self.MSGS, None, {}, 16, req=req)
+        self.assertEqual(req["strata_prefix"], {"tokens": 5})        # resolved as given, never replaced by the card
+
+    def test_a_prompt_without_a_system_message_pins_nothing(self):
+        msgs = [{"role": "user", "content": "Hello"}]
+        req = {"cache_system": "character-mira"}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.svc.prepare(msgs, None, {}, 16, req=req)
+        self.assertNotIn("strata_prefix", req)
+        self.assertIn("not pinned", out.getvalue())
+
+    def test_a_bad_name_is_a_400(self):
+        for bad in ("", "  ", "a b", 7, True, [], {"id": "x"}, "x" * 201):
+            with self.assertRaises(ValueError, msg=bad):
+                self.svc.prepare(self.MSGS, None, {}, 16, req={"cache_system": bad})
+
+    def test_metrics_show_each_name(self):
+        svc = Service(MockEngine(self.tok, "ok", max_context=CTX), self.tok,
+                      ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        svc.record_cache_ids(("character-mira", "client-a", True, 1), {"tokens": 1846}, 1900)
+        svc.record_cache_ids(("character-mira", "client-b", True, 1), {"tokens": 1846}, 1800)
+        view = svc.cache_id_view()
+        self.assertEqual([r["name"] for r in view["system"]], ["character-mira"])
+        self.assertEqual(view["system"][0]["pinned_tokens"], 1846)
+        self.assertEqual(view["system"][0]["requests"], 2)
+        self.assertEqual({r["name"] for r in view["client"]}, {"client-a", "client-b"})
+        self.assertIn("cache_ids", svc.metrics())
+
+
+class NamedBlocks(unittest.TestCase):
+    """Fork: named prompt blocks - text kept once under a name (POST /cache) and expanded into a prompt from
+    "{{cache:NAME}}", with Strata's own timestamps and the block used longest ago evicted first.  Neither the store
+    nor the server knows what a block's text means."""
+
+    def service(self):
+        tok = ByteTokenizer()
+        return Service(MockEngine(tok, "ok", max_context=CTX), tok,
+                       ChatTemplate(ROOT / "serve/chat_template.jinja")), tok
+
+    def test_the_store_keeps_text_by_name(self):
+        from serve.prompt_blocks import PromptBlocks
+        b = PromptBlocks()
+        before = time.time()
+        rec = b.put("doc", "hello")
+        self.assertEqual((rec["key"], rec["bytes"], rec["uses"]), ("doc", 5, 0))
+        self.assertAlmostEqual(rec["written"], before, delta=2)          # Strata's clock, not the client's
+        self.assertEqual(b.entry("doc")["uses"], 0)                      # reading the entry does not use it up
+        self.assertEqual(b.get("doc"), "hello")                          # a reference does
+        self.assertEqual(b.entry("doc")["uses"], 1)
+        self.assertEqual(b.view()["count"], 1)
+        self.assertNotIn("value", b.view()["entries"][0])                # /metrics never carries the text
+
+    def test_the_one_used_longest_ago_goes_first(self):
+        from serve.prompt_blocks import PromptBlocks
+        b = PromptBlocks(max_bytes=10)
+        b.put("a", "aaaa")
+        b.put("b", "bbbb")
+        b.get("a")                                                      # a used now: b is the older timestamp
+        b.put("c", "cccc")                                              # 12 bytes in a 10-byte store
+        self.assertIsNone(b.get("b"))
+        self.assertEqual(b.get("a"), "aaaa")
+        self.assertEqual(b.evictions, 1)
+        self.assertEqual(b.view()["bytes"], 8)
+
+    def test_names_limits_and_removal(self):
+        from serve.prompt_blocks import BlockError, PromptBlocks
+        b = PromptBlocks(max_bytes=8, max_entries=2)
+        for bad in ("", "a b", "x" * 201, 7, True, None, ["k"]):
+            with self.assertRaises(BlockError, msg=bad):
+                b.put(bad, "text")
+        for bad in ("", 7, None, "x" * 9):                              # empty, not text, larger than the store
+            with self.assertRaises(BlockError, msg=bad):
+                b.put("k", bad)
+        b.put("a", "aaaa")
+        b.put("b", "bbbb")
+        b.put("c", "cccc")                                              # a third name in a two-name store
+        self.assertEqual(b.view()["count"], 2)
+        self.assertTrue(b.remove("c")); self.assertFalse(b.remove("c"))
+        self.assertEqual(b.view()["bytes"], 4)
+        b.put("c", "ccc")
+        self.assertEqual(b.view()["bytes"], 7)                          # a replacement is counted once
+
+    def test_a_placeholder_becomes_the_text_it_names(self):
+        svc, _ = self.service()
+        svc.blocks.put("doc", "DOC " * 20)
+        msgs = [{"role": "user", "content": "Read {{cache:doc}}then answer."}]
+        ids, _, _ = svc.prepare(msgs, None, {}, 16)
+        self.assertEqual(msgs[0]["content"], "Read " + "DOC " * 20 + "then answer.")
+        self.assertEqual(ids, svc.encode_prompt(msgs, None, {}))
+        self.assertEqual(svc.blocks.entry("doc")["uses"], 1)             # the request counted as a use
+
+    def test_an_unknown_block_is_a_400_and_changes_nothing(self):
+        svc, _ = self.service()
+        msgs = [{"role": "user", "content": "{{cache:missing}}"}]
+        with self.assertRaises(ValueError) as e:
+            svc.prepare(msgs, None, {}, 16)
+        self.assertIn("missing", str(e.exception))
+        self.assertIn("POST /cache", str(e.exception))
+        self.assertEqual(msgs[0]["content"], "{{cache:missing}}")        # never sent as literal text
+
+    def test_the_pin_sits_where_the_named_block_ends(self):
+        svc, tok = self.service()
+        svc.blocks.put("shared", "SHARED TEXT\n" * 10)
+        svc.blocks.put("mine", "THIS CLIENT'S OWN TEXT\n" * 10)
+        msgs = [{"role": "system", "content": "{{cache:shared}}{{cache:mine}}"},
+                {"role": "user", "content": "Hello"}]
+        req = {"cache_pin": "shared", "cache_client": "client-a"}
+        ids, _, _ = svc.prepare(msgs, None, {}, 16, req=req)
+        n = req["strata_prefix"]["tokens"]
+        head = tok.decode(ids[:n])
+        self.assertTrue(head.endswith("SHARED TEXT\n"), head[-40:])      # the shared block, whole
+        self.assertNotIn("THIS CLIENT", head)                            # and not one client's own text past it
+        self.assertIn(f"pin={n}", StrataEngine.sampling_keys(req).split())
+
+    def test_cache_system_naming_a_block_pins_at_the_block(self):
+        svc, tok = self.service()
+        svc.blocks.put("shared", "SHARED TEXT\n" * 10)
+        svc.blocks.put("mine", "THIS CLIENT'S OWN TEXT\n" * 10)
+        msgs = [{"role": "system", "content": "{{cache:shared}}{{cache:mine}}"},
+                {"role": "user", "content": "Hello"}]
+        req = {"cache_system": "shared"}
+        ids, _, _ = svc.prepare(msgs, None, {}, 16, req=req)
+        head = tok.decode(ids[:req["strata_prefix"]["tokens"]])
+        self.assertTrue(head.endswith("SHARED TEXT\n"), head[-40:])
+        self.assertNotIn("THIS CLIENT", head)
+
+    def test_a_cache_system_that_is_not_a_block_keeps_the_role_rule(self):
+        svc, tok = self.service()
+        svc.blocks.put("shared", "SHARED TEXT\n" * 10)
+        msgs = [{"role": "system", "content": "{{cache:shared}}tail"},
+                {"role": "user", "content": "Hello"}]
+        req = {"cache_system": "some-other-name"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            ids, _, _ = svc.prepare(msgs, None, {}, 16, req=req)
+        head = tok.decode(ids[:req["strata_prefix"]["tokens"]])
+        self.assertIn("tail", head)                                      # the whole system message, as before
+        self.assertTrue(head.strip().endswith("<|im_end|>"), head[-40:])
+
+    def test_a_cache_pin_of_a_name_the_prompt_lacks_is_a_400(self):
+        svc, _ = self.service()
+        svc.blocks.put("stored", "text")
+        for pin in ("not-in-the-prompt", "stored"):                      # stored, but no message refers to it
+            with self.assertRaises(ValueError, msg=pin):
+                svc.prepare([{"role": "user", "content": "hi"}], None, {}, 16, req={"cache_pin": pin})
+
+    def test_an_explicit_prefix_still_wins(self):
+        svc, _ = self.service()
+        svc.blocks.put("shared", "SHARED TEXT\n" * 10)
+        req = {"cache_pin": "shared", "strata_prefix": {"tokens": 5}}
+        svc.prepare([{"role": "system", "content": "{{cache:shared}}"}, {"role": "user", "content": "hi"}],
+                    None, {}, 16, req=req)
+        self.assertEqual(req["strata_prefix"], {"tokens": 5})
+
+    def test_the_blocks_are_in_metrics_without_their_text(self):
+        svc, _ = self.service()
+        svc.blocks.put("doc", "secret text")
+        m = svc.metrics()
+        self.assertEqual(m["prompt_blocks"]["count"], 1)
+        self.assertEqual([e["key"] for e in m["prompt_blocks"]["entries"]], ["doc"])
+        self.assertNotIn("secret text", json.dumps(m))
+
+    def test_the_stores_size_comes_from_the_config(self):
+        from serve.prompt_blocks import PromptBlocks
+        b = PromptBlocks.from_config({"max_mib": 2, "max_entries": 7})
+        self.assertEqual((b.max_bytes, b.max_entries), (2 << 20, 7))
+        d = PromptBlocks.from_config(None)                               # no "prompt_blocks": the defaults
+        self.assertEqual((d.max_bytes, d.max_entries, d.view()["count"]), (8 << 20, 4096, 0))
+        for bad in ({"max_mib": -1}, {"max_entries": 0}, {"max_mib": "8"}, {"max_mib": True},
+                    {"max_mib": 8, "max_entries": 1, "extra": 1}, []):
+            with self.assertRaises(ValueError, msg=bad):
+                PromptBlocks.from_config(bad)
+
+    def test_images_are_expanded_but_not_pinned(self):
+        svc, _ = self.service()
+        svc.blocks.put("doc", "DOC")
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "{{cache:doc}}"}]}]
+        hits = svc.blocks.expand(msgs)
+        self.assertEqual(msgs[0]["content"][0]["text"], "DOC")
+        self.assertEqual(hits, [])                                       # a position only a string message gives
+
+
+class CacheEndpoints(unittest.TestCase):
+    """Fork: POST /cache stores a block, GET /cache lists them and GET /cache/<key> returns one; a request that refers
+    to a block gets its text, and one that refers to a name the server does not hold is a 400."""
+
+    @classmethod
+    def setUpClass(cls):
+        tok = ByteTokenizer()
+        cls.svc = Service(MockEngine(tok, "ok", max_context=CTX), tok,
+                          ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        cls.httpd = serve(cls.svc, port=0)
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def call(self, path, body=None):
+        data = body if isinstance(body, bytes) else (json.dumps(body).encode() if body is not None else None)
+        req = urllib.request.Request(self.base + path, data=data, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_store_read_list_and_delete(self):
+        code, out = self.call("/cache", {"key": "doc", "value": "hello there"})
+        self.assertEqual((code, out["key"], out["bytes"]), (200, "doc", 11))
+        self.assertEqual(self.call("/cache/doc")[1]["value"], "hello there")
+        code, listing = self.call("/cache")
+        self.assertEqual(code, 200)
+        self.assertEqual([e["key"] for e in listing["entries"]], ["doc"])
+        self.assertNotIn("hello there", json.dumps(listing))
+        self.assertEqual(self.call("/cache", {"key": "doc", "delete": True})[0], 200)
+        self.assertEqual(self.call("/cache/doc")[0], 404)
+        self.assertEqual(self.call("/cache", {"key": "doc", "delete": True})[0], 404)
+
+    def test_a_bad_store_request_is_a_400(self):
+        for body in (b"not json", {"key": "a b", "value": "x"}, {"key": "k", "value": ""},
+                     {"key": "k"}, {"key": "k", "value": 7}, ["k"]):
+            with self.subTest(body=body):
+                code, out = self.call("/cache", body)
+                self.assertEqual(code, 400, out)
+                self.assertIn("error", out)
+        self.assertEqual(self.call("/cache/a%20b")[0], 400)              # a name a URL cannot hold is refused
+
+    def test_a_request_expands_a_stored_block(self):
+        self.call("/cache", {"key": "card", "value": "CARD TEXT\n" * 40})
+        body = {"messages": [{"role": "user", "content": "{{cache:card}}Hello"}], "max_tokens": 4}
+        code, out = self.call("/v1/chat/completions", body)
+        self.assertEqual(code, 200, out)
+        plain = self.call("/v1/chat/completions", {"messages": [{"role": "user", "content": "Hello"}],
+                                                   "max_tokens": 4})[1]
+        self.assertGreater(out["usage"]["prompt_tokens"], plain["usage"]["prompt_tokens"] + 100)
+        self.call("/cache", {"key": "card", "delete": True})
+        code, out = self.call("/v1/chat/completions", body)              # the store no longer holds it
+        self.assertEqual(code, 400, out)
+        self.assertIn("card", out["error"]["message"])
+
+
 class GpuChoice(unittest.TestCase):
     """Issue #51: the config's \"gpu\" reaches the engine as CUDA_VISIBLE_DEVICES, numbered like nvidia-smi."""
 

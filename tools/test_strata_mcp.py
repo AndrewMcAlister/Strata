@@ -60,7 +60,7 @@ if __name__ == "__main__":
 '''
 
 FAKE_SERVER = r'''
-import json, os, signal, sys, time
+import json, os, signal, sys, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 a = sys.argv
@@ -73,6 +73,7 @@ if cfg.get("crash"):
     sys.exit(3)
 time.sleep(cfg.get("delay", 0))
 state = {"loaded": True}
+CACHE = {}                                   # the fake's prompt blocks: name -> text
 class H(BaseHTTPRequestHandler):
     def log_message(self, *x):
         pass
@@ -94,6 +95,18 @@ class H(BaseHTTPRequestHandler):
             self.js(200, {"service": "strata", "engine": "0.1.32", "uptime_s": 5, "activity": {"requests": 0},
                           "machine": {"gpu": {"name": "Fake GPU", "used_mib": 11000, "total_mib": 12227},
                                       "ram": {"used_gib": 40.0, "total_gib": 63.1}}})
+        elif p == "/cache":
+            self.js(200, {"entries": [{"key": k, "bytes": len(v), "written": 1000.0, "used": 2000.0, "uses": 3}
+                                      for k, v in CACHE.items()],
+                          "count": len(CACHE), "bytes": sum(len(v) for v in CACHE.values()),
+                          "max_bytes": 8388608, "max_entries": 4096, "evictions": 0})
+        elif p.startswith("/cache/"):
+            k = urllib.parse.unquote(p[len("/cache/"):])
+            if k in CACHE:
+                self.js(200, {"key": k, "bytes": len(CACHE[k]), "written": 1000.0, "used": 2000.0, "uses": 3,
+                              "value": CACHE[k]})
+            else:
+                self.js(404, {"error": {"message": "no cache block with that name (GET /cache lists them)"}})
         else:
             self.js(404, {"error": {"message": "not found"}})
     def do_POST(self):
@@ -111,6 +124,18 @@ class H(BaseHTTPRequestHandler):
             self.js(200, {"model": cfg["model_name"], "choices": [{"message": {"content": "x"}, "finish_reason": "length"}],
                           "usage": {"prompt_tokens": 30, "completion_tokens": body.get("max_tokens", 1)},
                           "timings": {"predicted_per_second": 61.5, "prompt_per_second": 400.0}})
+        elif p == "/cache":
+            k = body.get("key")
+            if not isinstance(k, str) or not k:
+                self.js(400, {"error": {"message": "key: 1 to 200 characters from letters, digits and . _ : + -"}})
+            elif body.get("delete") is True:
+                gone = CACHE.pop(k, None) is not None
+                self.js(200 if gone else 404, {"key": k, "deleted": gone})
+            elif not isinstance(body.get("value"), str) or not body["value"]:
+                self.js(400, {"error": {"message": "value: the block's text"}})
+            else:
+                CACHE[k] = body["value"]
+                self.js(200, {"key": k, "bytes": len(CACHE[k]), "written": 1000.0, "used": 1000.0, "uses": 0})
         else:
             self.js(404, {})
 httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
@@ -238,7 +263,8 @@ class Protocol(FakeRoot):
         self.assertEqual(init["serverInfo"]["name"], "strata")
         names = [t["name"] for t in r[2]["result"]["tools"]]
         self.assertEqual(names, ["strata_status", "strata_models", "strata_remove", "strata_install", "strata_start", "strata_stop",
-                                 "strata_logs", "strata_benchmark", "strata_connect_info"])
+                                 "strata_logs", "strata_benchmark", "strata_connect_info", "strata_cache_put",
+                                 "strata_cache_list", "strata_cache_get"])
         for t in r[2]["result"]["tools"]:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertFalse(t["inputSchema"]["additionalProperties"])
@@ -276,7 +302,7 @@ class Protocol(FakeRoot):
                            timeout=60, env=dict(os.environ))
         lines = [json.loads(x) for x in p.stdout.splitlines()]
         self.assertEqual(sorted(m["id"] for m in lines), [1, 2, 3])
-        self.assertEqual(len(next(m for m in lines if m["id"] == 2)["result"]["tools"]), 9)
+        self.assertEqual(len(next(m for m in lines if m["id"] == 2)["result"]["tools"]), 12)   # 9 + the fork's 3
         self.assertIn("ready", p.stderr)
 
     def test_not_a_strata_folder(self):
@@ -571,6 +597,58 @@ class StartStop(FakeRoot):
 
 
 # ------------------------------------------------------------------------------------------------ helpers
+class CacheTools(FakeRoot):
+    """Fork: the three tools for the named prompt blocks on a running server (/cache)."""
+
+    def setUp(self):
+        super().setUp()
+        self.port = free_port()
+        self.write_config("q2_0", port=self.port)
+        p = subprocess.Popen([sys.executable, str(self.root / "serve" / "server.py"), "--config",
+                              str(self.root / "strata-q2_0.json"), "--port", str(self.port)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.extra.append(p)
+        self.assertTrue(wait_for(lambda: self.strata.probe(self.port) is not None, 30))
+
+    def test_put_list_get_delete(self):
+        text = "You are a helpful character."
+        res, err = self.call("strata_cache_put", {"key": "character_a73c", "value": text})
+        self.assertFalse(err, res)
+        self.assertEqual(res["bytes"], len(text))
+        self.assertIn("stored", res["summary"])
+        got, err = self.call("strata_cache_get", {"key": "character_a73c"})
+        self.assertFalse(err, got)
+        self.assertEqual(got["value"], "You are a helpful character.")
+        lst, err = self.call("strata_cache_list", {})
+        self.assertFalse(err, lst)
+        self.assertEqual(lst["count"], 1)
+        self.assertEqual(lst["entries"][0]["key"], "character_a73c")
+        self.assertNotIn("value", lst["entries"][0])
+        res, err = self.call("strata_cache_put", {"key": "character_a73c", "delete": True})
+        self.assertFalse(err, res)
+        self.assertTrue(res["deleted"])
+        res, err = self.call("strata_cache_get", {"key": "character_a73c"})
+        self.assertTrue(err)
+        self.assertIn("no cache block", res["error"])
+
+    def test_bad_arguments_are_reported(self):
+        res, err = self.call("strata_cache_put", {"key": "k"})
+        self.assertTrue(err)
+        self.assertIn("value", res["error"])
+        res, err = self.call("strata_cache_put", {"key": "", "value": "x"})
+        self.assertTrue(err)
+        self.assertIn("key", res["error"])
+        res, err = self.call("strata_cache_put", {"key": "k", "value": ""})
+        self.assertTrue(err)
+        self.assertIn("value", res["error"])
+
+    def test_without_a_server_it_says_so(self):
+        self.strata.ports = lambda port: []                  # nothing answers on any port
+        res, err = self.call("strata_cache_list", {})
+        self.assertTrue(err)
+        self.assertIn("not running", res["error"])
+
+
 class Helpers(unittest.TestCase):
     def test_progress_from_setup_output(self):
         with tempfile.TemporaryDirectory() as d:

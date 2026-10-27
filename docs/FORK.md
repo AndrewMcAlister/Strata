@@ -23,6 +23,8 @@ carrying a diverging branch forever.
 | Pre-load model check | `tools/native_check.py`, `tools/gguf_inventory.py`, `tools/test_native_check.py` | `serve/server.py` hook |
 | Refusal diagnostics | — | `serve/server.py`, `serve/test_server.py`, `serve/web/app.js` |
 | Browser start page | `Scripts/Strata_Start.bat` | `serve/server.py` |
+| Cache ids (`cache_system`, `cache_client`) | — | `serve/server.py`, `serve/test_server.py` |
+| Named prompt blocks (`POST /cache`, `{{cache:NAME}}`) | `serve/prompt_blocks.py` | `serve/server.py`, `serve/test_server.py`, `tools/strata_mcp.py`, `tools/test_strata_mcp.py` |
 | MCP tools in use | `tools/filesystem_mcp.py`, `tools/web_search_mcp.py` | none |
 
 Everything else is upstream's.
@@ -182,6 +184,18 @@ git diff upstream/main develop > fork-cumulative.diff
 Re-apply on a fresh upstream with `git am <dir>/*.patch`, or cherry-pick single commits
 with `git cherry-pick -x <sha>`.
 
+A change that is not committed yet is stashed as a plain diff as well, so it can be
+re-applied after an upstream merge without the commit:
+
+```
+D:\Strata-data\patches\2026-10-27-cache-ids-and-prompt-blocks.patch   # sections 11-12
+git apply --3way D:\Strata-data\patches\2026-10-27-cache-ids-and-prompt-blocks.patch
+```
+
+It holds sections 11 and 12 together - `serve/server.py`, `serve/test_server.py`, the new
+`serve/prompt_blocks.py`, `tools/strata_mcp.py`, `tools/test_strata_mcp.py` and this file (the earlier
+`2026-10-27-cache-ids.patch` is the same work without section 12). It does not touch the model config.
+
 ## 8. Open items
 
 - Consider sending the start/stop scripts and `native_check.py` upstream. Both are
@@ -265,3 +279,163 @@ that origin (from before Strata replaced the engine) stayed until Ctrl+F5. A has
 
 **Verify:** restart the server, then check the page opens on the Monitor tab; or
 `Invoke-WebRequest http://127.0.0.1:8080/` reports a `Cache-Control: no-cache` header.
+
+## 11. Prompt reads, the conversation cache, and cache ids (27 Oct 2026)
+
+A character chatbot - several characters, several people, each browser client sending its own
+id - waited about 8 s on every prompt. The prompt is the cost: reading one is 337-559 tokens/s
+on this card, and a 1,900-token character card is 5-12 s.
+
+Upstream already has the three pieces this needs; none is on by default:
+
+- **Checkpoints** (`--prompt-cache`, default 6): the engine keeps the state at turn boundaries,
+  so a prompt that starts with one reads only what follows. `--prompt-cache-root` (default
+  2048) is the shortest system prompt that gets a root checkpoint: a short character card was
+  never checkpointed at all, so `--prompt-cache-root 256` is in the live config.
+- **Parked conversations** (`--conversation-cache-mib`, `--conversation-cache-slots`): when the
+  next request is a different conversation, the engine parks the current one (host RAM) and
+  restores it when that client comes back. 0.1.51 only - the packaged 0.1.28 engine answers
+  "unknown argument: --conversation-cache-mib" and never gets to serving.
+- **A pinned prefix** (`pin=N`, sent for `strata_prefix`): a checkpoint at N that retention never
+  evicts, and a parked conversation holding it stays parked.
+
+**What this fork adds** (`serve/server.py`, server only - no engine change):
+
+```
+POST /v1/chat/completions
+{"cache_system": "character-mira", "cache_client": "client-a73ce89e5f2e46d",
+ "messages": [{"role": "system", "content": "<the card>"}, ...]}
+```
+
+- `cache_system` names the character's card. The leading `system`/`developer` messages are
+  marked as the shared prefix, which `resolve_prefix()` turns into the engine's `pin=N` at the
+  card's end (the exact token boundary is decided by the rendered text, never by the name).
+  An explicit `strata_prefix` in the same request wins.
+- `cache_client` names one client's conversation. Nothing is sent to the engine for it - the
+  conversation cache matches by tokens, not names - it names the client in `/metrics`
+  (`cache_ids`) and in one log line per new name.
+- Absent fields leave the request exactly as it was. A malformed name (empty, spaces, over 200
+  characters or not a string) is a 400. `POST /v1/messages` takes the same fields; its
+  top-level `system` is already message 0 there.
+
+**Measured here** (RTX 5070 Ti + Ryzen 7 8845HS, IQ3_XXS, context 204800, int8 K/V, engine
+0.1.51 built from this tree: CMake VS 2022, CUDA 13.4, `-DCMAKE_CUDA_ARCHITECTURES=120`):
+
+| Run | Result |
+|---|---|
+| Three characters, ~3.7k-token cards, three clients, parking on | first turns 6.66 / 9.17 / 6.46 s; every later request 0.36-0.45 s, a second person behind the same card included |
+| Turn 2 of a 5,450-token prompt | engine restored 2,895 tokens from its parked conversation in 42.8 ms, then read the 2,555 new tokens at ~410 tokens/s |
+| 2,048 MiB budget | evictions after ~6 conversations; parked entries dropped |
+| 3,072 MiB budget, 6 slots | 6 parked, **0 evictions**; 37,859 of 70,183 prompt tokens reused over 25 requests |
+| Same traffic, `cache_system` + `cache_client` vs none | no measurable difference at this size (0.32-0.49 s either way): parking alone reuses the card |
+
+The budget is RAM, not VRAM, and it is the limit that matters, not the slot count. Parked
+snapshots measured 347 MiB at 624 tokens, 380 MiB at 2,929 and 531 MiB at 5,477: most of a
+snapshot is a fixed cost, so the budget buys a handful of *conversations*, not a token count.
+3 GiB held six parked conversations with no evictions on this machine (~4.7 GB free with the
+engine loaded); 2 GiB did not hold five. `--conversation-cache-slots` only caps how many
+conversations.
+
+**The pin's trade-off, read from the engine's code and visible in the log:** a match that reaches
+a pinned checkpoint is *taken* from the parked conversation rather than *borrowed* from it
+(`ConversationCache::borrows`). So a second person's first message to a character consumes the
+first person's parked history; that history is read again on their next turn (the card itself
+stays pinned). Sending only `cache_client` keeps the borrow, which is the better behaviour when
+the cache is not under pressure. Neither puts a card in a queue of its own: a pin protects the
+whole parked conversation that holds it.
+
+**Not done:** the ~10k-token "system prompt queue" as a separate store. Section 12 adds a named store of
+*prompt text* (the blocks a request is built from), which keeps every request behind a block byte-identical;
+what is still missing is a pool of pinned *engine state*, one entry per card, so a card is reused without
+taking a whole parked conversation.
+
+**Verify:** `python -m unittest serve.test_server.CacheIds -v` (6 tests), and
+`python -m unittest serve.test_server` (361 tests, 114 s on this machine).
+
+**Re-implementation:** the change is two new top-level fields and one helper family
+(`cache_id`, `note_cache_ids`, `record_cache_ids`, `cache_id_view`) plus its call in
+`prepare()`; upstream clients never send the fields, so a merge can keep both sides.
+
+## 12. Named prompt blocks (27 Oct 2026)
+
+Section 11 makes the engine keep a card it has already read. That only helps if the card arrives again as
+the *same tokens*: a client that rebuilds its prompt every turn, with one character different in the
+preamble, makes everything after that character a miss and reads the card again.
+
+So Strata keeps the text itself, under a name the client chooses, and expands it into the prompt:
+
+```
+POST /cache   {"key": "character_a73ce89e5f2e46d0807369a5fd62e74f", "value": "<the card>"}
+POST /v1/chat/completions
+{"cache_pin": "character_a73ce89e5f2e46d0807369a5fd62e74f",
+ "cache_client": "a73ce89e5f2e46d0807369a5fd62e74f",
+ "messages": [
+   {"role": "system", "content": "{{cache:character_a73ce89e5f2e46d0807369a5fd62e74f}}\n\n{{cache:user_info_a73ce89e5f2e46d0807369a5fd62e74f}}\n\n{{cache:conversation_summary_a73ce89e5f2e46d0807369a5fd62e74f}}"},
+   {"role": "user", "content": "the new message"}]}
+```
+
+**The store knows nothing about what the text is.** A block is a name, some text, and Strata's own
+timestamps. There is no notion of a character, a person or a summary anywhere in `serve/prompt_blocks.py`
+or in the server code that uses it; those names exist only in the client.
+
+- `POST /cache {"key", "value"}` stores or replaces a block; `{"key", "delete": true}` removes it.
+  Names are 1-200 characters of letters, digits and `. _ : + -`; one block holds at most 4 MiB, the
+  whole store 8 MiB in 4096 blocks (the config's `"prompt_blocks": {"max_mib": 8, "max_entries": 4096}`
+  changes it). A malformed request is a 400.
+- `GET /cache` lists each block's name, size, the time Strata stored it and last used it, and how often -
+  never the text. `GET /cache/<key>` returns one block's text with the same figures.
+- `{{cache:NAME}}` in a message (or in the text part of a message with images) is replaced by the block's
+  text before the prompt is rendered. A name the store does not hold is a **400**, never the literal
+  placeholder sent to the model: a client that forgot to store its card learns it from the answer, and the
+  model never sees `{{cache:`.
+- A reference counts as a *use*. When the store is full, the block used longest ago goes first - not the
+  one stored longest ago, which would evict the long-lived preamble that every request uses in favour of a
+  summary written a minute ago. Order is kept by a counter, so two blocks written in the same clock tick
+  still evict in the right order.
+- `cache_pin: "<name>"` names the block that ends the shared start of the prompt: the server marks
+  `strata_prefix={"message": i, "chars": n}` there, which `resolve_prefix()` turns into the engine's
+  `pin=N` (section 11). With one message holding the card and then the client's own text, the card's block
+  is where the pin belongs; the leading-system-message rule of `cache_system` would pin past it, at a
+  boundary only one client shares. `cache_system: "<name>"` does the same when its name is a block in the
+  prompt and keeps its old rule when it is not; an explicit `strata_prefix` still wins; a `cache_pin` that
+  names no block in the prompt is a 400 (pinning nothing would be silently slower).
+- The store is memory only. A restart empties it; the client stores its blocks again, and until it does,
+  its requests are refused with the block's name in the message. Values are never logged; the log line on
+  a store holds the name, its size and the store's totals.
+- `/metrics` gains `prompt_blocks` (the same figures as `GET /cache`), and `tools/strata_mcp.py` gains
+  `strata_cache_put`, `strata_cache_list` and `strata_cache_get` for an agent with no HTTP client of its own.
+
+**Measured here** (RTX 5070 Ti + Ryzen 7 8845HS, IQ3_XXS, context 204800, int8 K/V, engine 0.1.51 from this
+tree, the live config's 3 GiB conversation cache and 6 slots): one card (~3,600 tokens), a per-client block
+of the client's own text and a per-client summary block; two clients, five requests in each phase; phase A
+stored the three texts as blocks and sent `cache_pin` naming the card, phase B sent exactly the same texts
+inline (`D:\Strata-data\probe\blocks.py`).
+
+| The engine's own log | Blocks + `cache_pin` | The same texts inline |
+|---|---|---|
+| A returning client's next turn | restored 3,688 tokens at the pinned checkpoint in 45.4 ms | restored 452 tokens at a turn-boundary checkpoint |
+| A second client's first request, same card | reused 3,688 tokens | reused 452 tokens |
+| Parked conversations evicted while parking | 0 | 2, on byte pressure |
+
+Wall clock did **not** separate the phases on this machine, so no speed is claimed from it: the same
+4,510-token cold read took 9.43 s in phase A and 6.45 s in phase B, and inside phase A the same 3,688-token
+reuse took 2.59 s once and 11.08 s another time, with per-request prefill between 210 and 750 tokens/s for
+identical work. What the blocks bought is in the log and in the token counts: the shared 3,688-token start
+came from a checkpoint on every request, where the inline shape matched 452 tokens and cost two parked
+conversations.
+
+The text that is genuinely new on every request (a client's own details and its summary, 800-1,600 tokens
+here) is not made cheaper by any of this, and it is what the remaining seconds are spent on. Keeping the
+part that changes last in the prompt leaves it the only part that has to be read again.
+
+**Verify:** `python -m unittest serve.test_server.NamedBlocks serve.test_server.CacheEndpoints -v` (16 tests),
+`python -m unittest serve.test_server` (377 tests, 113 s on this machine),
+`python -m unittest tools.test_strata_mcp` (53 tests; stop Strata first - the start/stop tests need port 8080
+free).
+
+**Re-implementation:** `serve/prompt_blocks.py` is a new file and depends on nothing else in the tree; the
+server changes are the import, `self.blocks` in `__init__`, `expand()` and the `blocks` argument in
+`prepare()`, `block_pin()` used by `note_cache_ids()`, the `/cache` routes, one `/metrics` key and the
+config line. Upstream requests carry no `{{cache:` and no `cache_pin`, so a merge can keep both sides; the
+one thing to re-check is that `expand()` still runs before `encode_prompt()` in `prepare()`.
+

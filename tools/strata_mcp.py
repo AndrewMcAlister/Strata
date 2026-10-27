@@ -35,6 +35,7 @@ import threading
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -2033,6 +2034,33 @@ def tool_defs(models: dict, families: dict, contexts: list) -> list:
                         "Codex CLI, the OpenAI SDK, curl, Cursor/Continue/Open WebUI. Read-only.",
          "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"port": port}},
          "annotations": ro},
+        {"name": "strata_cache_put", "title": "Store a prompt block",
+         "description": "Stores text under a name on the running server (this fork's named prompt blocks). A request "
+                        "then refers to it as {{cache:NAME}} inside a message instead of sending the text again, so "
+                        "every request that shares that text reads it once. Strata stamps the block with its own "
+                        "clock and evicts the block used longest ago when the store is full. With delete=true it "
+                        "removes the block instead.",
+         "inputSchema": {"type": "object", "additionalProperties": False, "required": ["key"], "properties": {
+             "port": port,
+             "key": {"type": "string", "minLength": 1, "maxLength": 200,
+                     "description": "the block's name: letters, digits and . _ : + - (e.g. 'doc_ab12')"},
+             "value": {"type": "string", "minLength": 1, "maxLength": 4 << 20,
+                       "description": "the text the block holds, up to 4 MiB"},
+             "delete": {"type": "boolean", "description": "remove this block instead (default false)"}}},
+         "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}},
+        {"name": "strata_cache_list", "title": "List prompt blocks",
+         "description": "The named prompt blocks the running server holds: each one's name, size, when it was stored "
+                        "and last used, and how often - never the text. Reports the store's size against its limit "
+                        "and how many blocks it has evicted. Read-only.",
+         "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"port": port}},
+         "annotations": ro},
+        {"name": "strata_cache_get", "title": "Read a prompt block",
+         "description": "The text of one named prompt block on the running server, with its size and use count. "
+                        "Reading it here does not count as a use (only a request that refers to it does). Read-only.",
+         "inputSchema": {"type": "object", "additionalProperties": False, "required": ["key"], "properties": {
+             "port": port,
+             "key": {"type": "string", "minLength": 1, "maxLength": 200, "description": "the block's name"}}},
+         "annotations": ro},
     ]
 
 
@@ -2629,6 +2657,54 @@ class Tools:
                                                    f"(--openai-api-base {base}/v1)"}},
             "other_devices": "the server listens on this PC only; to reach it from your network, run setup with "
                              "--host 0.0.0.0 --api-key <secret> (docs/DETAILS.md, 'Using it')"}
+
+
+    # ---- the named prompt blocks (fork: serve/prompt_blocks.py, POST /cache, {{cache:NAME}} in a message)
+    def _cache_server(self, port=None):
+        s = self.s
+        for p in s.ports(port):
+            info = s.probe(p, deep=False)
+            if info and not info.get("other"):
+                return p, s.api_key_for(p)
+        raise ToolError("Strata is not running: start it first (strata_start)")
+
+    @staticmethod
+    def _cache_error(status, out, fallback):
+        msg = ((out or {}).get("error") or {}).get("message") if isinstance(out, dict) else None
+        if status in (400, 401, 403, 404) and msg:
+            raise ToolError(msg)
+        raise ToolError(f"the server did not answer (HTTP {status}): a Strata older than this fork has no /cache")
+
+    def strata_cache_put(self, port=None, key=None, value=None, delete=False) -> dict:
+        p, api_key = self._cache_server(port)
+        if delete:
+            body = {"key": key, "delete": True}
+        elif value is None:
+            raise ToolError("value: the text to store (or delete=true to remove the block)")
+        else:
+            body = {"key": key, "value": value}
+        st, out = http_json(f"http://127.0.0.1:{p}/cache", "POST", body, api_key=api_key, timeout=30)
+        if st != 200:
+            self._cache_error(st, out, f"the block {key!r} was not {'removed' if delete else 'stored'}")
+        if delete:
+            return {"summary": f"block {key!r} removed", **out}
+        return {"summary": f"block {key!r} stored: {out['bytes']} bytes", **out}
+
+    def strata_cache_list(self, port=None) -> dict:
+        p, api_key = self._cache_server(port)
+        st, out = http_json(f"http://127.0.0.1:{p}/cache", api_key=api_key, timeout=10)
+        if st != 200 or not isinstance(out, dict):
+            self._cache_error(st, out, "the blocks could not be listed")
+        return {"summary": (f"{out['count']} block{'s' if out['count'] != 1 else ''}, {out['bytes']} of "
+                            f"{out['max_bytes']} bytes used, {out['evictions']} evicted"), **out}
+
+    def strata_cache_get(self, port=None, key=None) -> dict:
+        p, api_key = self._cache_server(port)
+        st, out = http_json(f"http://127.0.0.1:{p}/cache/{urllib.parse.quote(key or '', safe='')}",
+                            api_key=api_key, timeout=10)
+        if st != 200 or not isinstance(out, dict):
+            self._cache_error(st, out, f"no block named {key!r} is stored (strata_cache_list shows them)")
+        return {"summary": f"block {out['key']!r}: {out['bytes']} bytes, referred to {out['uses']} time(s)", **out}
 
 
 # ------------------------------------------------------------------------------------------------ MCP over stdio
