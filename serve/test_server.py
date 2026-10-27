@@ -220,8 +220,12 @@ class MaxTokens(unittest.TestCase):
     def test_a_refusal_is_recorded_and_explained(self):
         """The Monitor and the log both say a request was refused: nothing ran, so totals stay put."""
         before = dict(self.svc.totals)
-        s, b, _, _ = self.call("anthropic", max_tokens=CTX)
-        self.assertEqual(s, 400, b)
+        self.svc.fit_max_tokens = False             # the default now shortens the cap; this test is the strict refusal
+        try:
+            s, b, _, _ = self.call("anthropic", max_tokens=CTX)
+            self.assertEqual(s, 400, b)
+        finally:
+            self.svc.fit_max_tokens = True
         row = list(self.svc.history)[-1]
         self.assertEqual(row["finish"], "rejected")
         self.assertGreater(row["prompt_tokens"], 0)
@@ -250,6 +254,7 @@ class MaxTokens(unittest.TestCase):
         import contextlib
         import io
         os.environ["STRATA_DEBUG"] = "1"
+        self.svc.fit_max_tokens = False             # the default now shortens the cap; this test is the strict refusal
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -259,6 +264,7 @@ class MaxTokens(unittest.TestCase):
             self.assertIn("[strata] refused anthropic:", log)
             self.assertIn("prompt_tokens=", log)                           # _debug_req fires for a refusal too
         finally:
+            self.svc.fit_max_tokens = True
             del os.environ["STRATA_DEBUG"]
 
     def test_unset_budget_with_a_near_full_prompt(self):
