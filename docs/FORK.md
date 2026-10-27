@@ -19,6 +19,7 @@ carrying a diverging branch forever.
 | Change | Files | Upstream edits |
 |---|---|---|
 | Start/stop wrappers | `Scripts/Strata_Start.bat`, `Strata_Stop.bat`, `Strata_DefaultModel.ps1`, `tools/test_start_script.py` | none |
+| Windows service | `Scripts/Strata_Service.py`, `Scripts/Strata_Service.ps1`, `tools/test_service.py` | none |
 | Pre-load model check | `tools/native_check.py`, `tools/gguf_inventory.py`, `tools/test_native_check.py` | `serve/server.py` hook |
 | Refusal diagnostics | — | `serve/server.py`, `serve/test_server.py`, `serve/web/app.js` |
 | MCP tools in use | `tools/filesystem_mcp.py`, `tools/web_search_mcp.py` | none |
@@ -85,6 +86,20 @@ Monitor row.
 Merged with upstream's newer refusal handling (both kept): `forget_prompt()` on context
 refusals (#567), `ClientGone` around the MCP prepare, and the `cancel` plumbing.
 
+**Merge regression fixed (27 Oct 2026).** The merge dropped upstream's two lines
+
+```
+cancel = threading.Event()
+self._watch_client(cancel)
+```
+
+from `_openai` and `_anthropic`. Every POST to those routes died with
+`NameError: name 'cancel' is not defined`, and the client saw the connection close
+with no response. Restored in both, keeping this fork's `api=` argument. Upstream's
+default is now `fit_max_tokens=True`, which shortens the answer instead of refusing;
+the two strict refusal tests now set it `False` explicitly, as
+`test_strict_mode_keeps_the_llama_cpp_400` already did.
+
 **Verify:** `python -m pytest serve/test_server.py -q -k "refus or context"`.
 
 **Re-implementation:** most conflict-prone change. Apply last, after reading upstream's
@@ -143,6 +158,7 @@ Verify before committing the merge:
 
 ```
 python -m py_compile serve/server.py setup.py
+python -m pytest serve/test_server.py -q           # full file: py_compile cannot see a NameError in a handler
 python -m pytest tools/test_native_check.py -q      # 17
 python -m pytest tools/test_start_script.py -q      # 12
 git grep -n -E '^(<<<<<<<|>>>>>>>)'                 # none
@@ -172,3 +188,64 @@ with `git cherry-pick -x <sha>`.
   sources.
 - `tools/test_start_script.py` was updated for the `choice`-based picker (the old test
   asserted a `set /p` guard that no longer exists).
+
+## 9. Windows service (27 Oct 2026)
+
+The start script needs a signed-in person. The service starts Strata at boot, keeps
+serving after sign-out, and starts the server again if it exits.
+
+- `Scripts\Strata_Service.ps1` is the control panel: `Install`, `Uninstall`, `Start`,
+  `Stop`, `Restart`, `Status`, `Logs`, `Edit`. Actions that change the system ask for
+  elevation once; their output is shown in the calling window afterwards.
+- `Scripts\Strata_Service.py` is the service. A Windows service cannot run
+  `strata launch` (it detaches and returns, and the SCM would call the service dead),
+  so the service runs Strata's own owner host (`strata_control.runtime`) and adds the
+  watchdog the host does not have. No pywin32, no NSSM, no new package: the SCM calls
+  are ctypes, like `winproc.py`.
+- Registration: name `Strata`, display `Strata AI Server`, LocalSystem, automatic
+  start, SCM restart actions 5 s / 30 s / 60 s. `install` refuses to replace a
+  same-named service it did not create unless `-Force` is given.
+- Its own state, not the user's: `C:\ProgramData\Strata\service` holds `service.conf`,
+  daily logs in `logs\`, and `state\` (runtime and profiles), which Strata restricts to
+  SYSTEM. The profile is `strata-service`; the installing person's
+  `%APPDATA%\Strata` profiles are not used. `Status` therefore reports the SCM state
+  and `/health`, not the private runtime files.
+- The model is one editable file, `service.conf`, written on the first install with
+  every installed model listed above the chosen line:
+
+```
+# Model configs found in D:\Strata when this file was written:
+#  D:\Strata\strata-iq2_xs-20k.json  qwen3.8-flash-next-iq2_xs  context 20480  port 8080
+#  D:\Strata\strata-iq3_s.json       qwen3.8-flash-next-iq3_s   context 131072  port 8080
+#  D:\Strata\strata-iq3_xxs.json     qwen3.8-flash-next-iq3_xxs  context 204800  port 8080
+config=D:\Strata\strata-iq3_xxs.json
+#port=8080
+#host=127.0.0.1
+#shutdown_timeout=30
+```
+
+  Edit `config=`, then `-Action Restart`. The installing account is granted Modify on
+  the file, so Notepad needs no elevation. A reinstall keeps an existing `config=`.
+- Watchdog: `ready` waits; `starting` waits; `failed` or `stale` stops what is left and
+  starts again; backoff 5 s doubling to 60 s, reset on `ready`. A failed start copies
+  the runtime's error, exit codes and the server's last lines into the daily log.
+- Stop is the documented drain: the SCM STOP sets a flag, the host closes the server's
+  stdin, `serve/owner_guard.py` turns EOF into Ctrl+C, and the engine is released.
+  `strata launch --stop` does not know about the service; use `-Action Stop`.
+- One server per port. `Install` warns about a scheduled task or Run entry that also
+  starts Strata; disable it before the service starts, or the second copy fails on the
+  busy port.
+- Not done: a real reboot. The registration is AUTO_START and the SCM start path was
+  exercised; boot itself was not. A change made here was always run from an already
+  elevated console, so the wrapper's own hand-off to an elevated copy was checked only
+  on its own (the `Start-Process -Verb RunAs` line, with a stand-in command), not as a
+  full run from a normal console.
+
+**Measured here (27 Oct 2026, RTX 5070 Ti + Ryzen 7 8845HS, IQ3_XXS, context 204800):**
+service start to `/health` with `loaded: true`: 36-65 s. A 1-token completion returned
+200 on both `/v1/chat/completions` and `/v1/messages`. Stop drained and a restart
+reloaded. The first attempts failed because of the `cancel` merge regression above
+(the readiness probe's POST was dropped); after that fix the service stayed up.
+
+**Verify:** `python -m pytest tools/test_service.py -q` (32 tests; no Administrator
+rights and no service-manager changes).
