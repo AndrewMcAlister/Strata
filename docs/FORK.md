@@ -22,6 +22,7 @@ carrying a diverging branch forever.
 | Windows service | `Scripts/Strata_Service.py`, `Scripts/Strata_Service.ps1`, `tools/test_service.py` | none |
 | Pre-load model check | `tools/native_check.py`, `tools/gguf_inventory.py`, `tools/test_native_check.py` | `serve/server.py` hook |
 | Refusal diagnostics | — | `serve/server.py`, `serve/test_server.py`, `serve/web/app.js` |
+| Browser start page | `Scripts/Strata_Start.bat` | `serve/server.py` |
 | MCP tools in use | `tools/filesystem_mcp.py`, `tools/web_search_mcp.py` | none |
 
 Everything else is upstream's.
@@ -249,3 +250,18 @@ reloaded. The first attempts failed because of the `cancel` merge regression abo
 
 **Verify:** `python -m pytest tools/test_service.py -q` (32 tests; no Administrator
 rights and no service-manager changes).
+
+## 10. Browser start page (27 Oct 2026)
+
+The launcher opened `http://127.0.0.1:8080/`. Opening a URL the browser already has in a
+tab only focuses that tab — it does not reload it — so the old llama.cpp page cached at
+that origin (from before Strata replaced the engine) stayed until Ctrl+F5. A hash-only
+`/#monitor` would not have reloaded the document either.
+
+- `serve/server.py --open` opens `/?open=<epoch>#monitor`: the query is a new URL every
+  start, so the browser performs a real navigation, and the hash selects the Monitor tab.
+- `/` and `/api-monitor` are sent with `Cache-Control: no-cache`.
+- `Scripts/Strata_Start.bat`'s "already running" branch opens the same URL.
+
+**Verify:** restart the server, then check the page opens on the Monitor tab; or
+`Invoke-WebRequest http://127.0.0.1:8080/` reports a `Cache-Control: no-cache` header.

@@ -434,7 +434,7 @@ echo.
 echo  Two servers cannot share one port and one model.  Strata_Start.bat /restart stops it and
 echo  starts it again; Strata_Stop.bat stops it and leaves it stopped.
 echo.
-if not "%OPEN%"=="" start "" "http://127.0.0.1:%SRVPORT%/"
+if not "%OPEN%"=="" start "" "http://127.0.0.1:%SRVPORT%/?open=%RANDOM%#monitor"
 exit /b 0
 
 rem --- a model left behind by a server that died -------------------------------------------------
