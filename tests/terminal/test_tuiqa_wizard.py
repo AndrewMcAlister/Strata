@@ -198,7 +198,7 @@ class InstalledModelFolder(Base):
         ctx.settings.family, ctx.settings.model, ctx.settings.vision = "qwen", "IQ3_XXS", "cpu"
 
         async def case(app, pilot, ctx):
-            await press(pilot, "enter", "up", "enter")                 # Start -> Model (up: IQ3_XXS, the 64 GB tier pre-selects IQ3_S) -> Folder
+            await press(pilot, "enter", "enter")                       # Start -> Model (the 48 GB tier and up preselects IQ3_XXS) -> Folder
             self.assertEqual(app.current, "folder")
             field = app.screen.query_one("#folderpath")
             self.assertEqual(Path(field.value).resolve(), docs.resolve())

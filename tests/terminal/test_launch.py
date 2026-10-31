@@ -114,7 +114,7 @@ class CatalogRules(unittest.TestCase):
                     continue
                 self.assertAlmostEqual(r.download_gb, models[r.model]["download_gb"])
             rec = [r for r in rows if r.recommended]
-            self.assertEqual([(r.family, r.model) for r in rec], [("qwen", "IQ3_S")])      # 64 + 12 GB: the 64 GB tier
+            self.assertEqual([(r.family, r.model) for r in rec], [("qwen", "IQ3_XXS")])      # 64 + 12 GB: IQ3_XXS from 46 GB up
 
     def test_the_recommendation_follows_the_memory_tiers(self):
         # the owner's tiers count RAM + VRAM: 44 GB is the 40 GB tier (Swift 1.5 IQ2_XS, Gyro-M named), 60 GB the 48 GB tier
@@ -884,7 +884,7 @@ class FlagsCommand(unittest.TestCase):
     def test_defaults_come_from_the_recommendation(self):
         p = self.plan()
         s = p["settings"]
-        self.assertEqual((s["family"], s["model"], s["context"], s["access"], s["tune"]), ("qwen", "IQ3_S", 131072, "local", "skip"))
+        self.assertEqual((s["family"], s["model"], s["context"], s["access"], s["tune"]), ("qwen", "IQ3_XXS", 131072, "local", "skip"))
         self.assertTrue(any("picked" in w for w in p["warnings"]))
 
     def test_family_and_kv_and_gpu_and_data_dir_and_set(self):

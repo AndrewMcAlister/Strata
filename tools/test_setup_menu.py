@@ -94,28 +94,29 @@ class UnslothSizes(unittest.TestCase):
 
 
 class RecommendedSizes(unittest.TestCase):
-    """0.1.44 (owner): IQ3_S, UD-Q4_K_XL and UD-IQ4_XS are the recommended sizes; recommend, never force."""
+    """0.1.44 (owner): recommend, never force.  Since 2026-11-01 the pick is IQ3_XXS (IQ3_S is a choice);
+    UD-Q4_K_XL and UD-IQ4_XS are the Unsloth picks."""
 
     def names(self, family):
         return [m for m in setup.MODELS if family in setup.MODELS[m].get("families", ("qwen", "swift"))]
 
-    def test_qwen_and_swift_default_to_iq3_s_when_it_fits(self):
+    def test_qwen_and_swift_default_to_iq3_xxs_when_it_fits(self):
         for fam in ("qwen", "swift"):
             n = self.names(fam)
-            self.assertIn("IQ3_S", n)
-            self.assertEqual(setup.recommended_size(fam, n, 67.7), "IQ3_S")
-            self.assertEqual(setup.recommended_size(fam, n, 191.0), "IQ3_S")      # not the largest: IQ3_S stays the pick
-            self.assertEqual([m for m in n if setup.size_tag(fam, m)], ["IQ3_S"])  # the others are choices, unmarked
+            self.assertIn("IQ3_XXS", n)
+            self.assertEqual(setup.recommended_size(fam, n, 67.7), "IQ3_XXS")
+            self.assertEqual(setup.recommended_size(fam, n, 191.0), "IQ3_XXS")      # not the largest: IQ3_XXS stays the pick
+            self.assertEqual([m for m in n if setup.size_tag(fam, m)], ["IQ3_XXS"])  # the others are choices, unmarked
 
-    def test_without_the_ram_the_largest_that_fits_and_iq3_s_stays_marked(self):
+    def test_without_the_ram_the_largest_that_fits_and_iq3_xxs_stays_marked(self):
         n = self.names("qwen")
         self.assertEqual(setup.recommended_size("qwen", n, 61.0), "IQ3_XXS")      # IQ3_S needs 62 GB
         self.assertEqual(setup.recommended_size("qwen", n, 52.0), "IQ3_XXS")      # 48 GB tier (RAM + VRAM - 5 GB)
         self.assertEqual(setup.recommended_size("qwen", n, 40.0, 11.0), "IQ3_XXS")  # 40 + 11 - 5 = 46 GB together
         self.assertEqual(setup.recommended_size("qwen", n, 32.0, 12.0), "IQ2_XS")  # 44 - 5 = 39 GB: the 40 GB tier
         self.assertEqual(setup.recommended_size("swift", self.names("swift"), 32.0, 12.0), "IQ2_XS")
-        self.assertEqual(setup.recommended_size("qwen", n, 32.0, 35.0), "IQ3_S")   # 67 - 5 = 62 GB together
-        self.assertEqual(setup.size_tag("qwen", "IQ3_S"), " (recommended)")
+        self.assertEqual(setup.recommended_size("qwen", n, 32.0, 35.0), "IQ3_XXS")   # 67 - 5 = 62 GB together
+        self.assertEqual(setup.size_tag("qwen", "IQ3_XXS"), " (recommended)")
 
     def test_3425_the_tiers_leave_5_gb_for_windows(self):
         # the reporter: RTX 5080 (16 GB) + 32 GB of RAM summed to 48 GB and got IQ3_XXS, which read ~11 GB from the SSD
@@ -123,13 +124,12 @@ class RecommendedSizes(unittest.TestCase):
         self.assertEqual(setup.TIER_SYSTEM_RESERVE_GB, 5.0)
         self.assertEqual(setup.recommended_size("qwen", n, 31.9, 15.9), "IQ2_XS")
         self.assertEqual(setup.tier_pick(31.9, 15.9), ("swift", "IQ2_XS"))
-        # boundaries: floors 38 / 46 / 62 plus the 5 GB
+        # boundaries: floors 38 / 46 plus the 5 GB (the 62 GB IQ3_S tier left on 2026-11-01: IQ3_XXS is the default)
         self.assertEqual(setup.tier_pick(43.0), ("swift", "IQ2_XS"))
         self.assertIsNone(setup.tier_pick(42.9))
         self.assertEqual(setup.tier_pick(51.0), ("qwen", "IQ3_XXS"))
         self.assertEqual(setup.tier_pick(50.9), ("swift", "IQ2_XS"))
-        self.assertEqual(setup.tier_pick(67.0), ("qwen", "IQ3_S"))
-        self.assertEqual(setup.tier_pick(66.9), ("qwen", "IQ3_XXS"))
+        self.assertEqual(setup.tier_pick(67.0), ("qwen", "IQ3_XXS"))
         self.assertEqual(setup.tier_pick(40.0, 3.0), ("swift", "IQ2_XS"))      # VRAM counts the same as RAM
 
     def test_coder_has_nothing_marked(self):

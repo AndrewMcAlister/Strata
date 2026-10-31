@@ -75,12 +75,12 @@ test('the page shows the own pick of the engine for this PC first (the same one 
   assert.deepEqual(names(recommendedVersions(all, { family: null, model: null })), ['Gyro-S', 'IQ2_XS', 'IQ3_S', 'UD-Q4_K_XL']);
 });
 
-test('the tiers of the engine are 40 GB Swift IQ2_XS, 48 GB IQ3_XXS, 64 GB IQ3_S in both Python places the page and strata launch read', async () => {
+test('the tiers of the engine are 40 GB Swift IQ2_XS and 48 GB and up IQ3_XXS (the 64 GB IQ3_S tier left 2026-11-01) in both Python places the page and strata launch read', async () => {
   for (const file of ['../../../setup.py', '../../../tools/strata_mcp.py']) {
     const text = await readFile(new URL(file, import.meta.url), 'utf8');
     const m = /^MEMORY_TIERS\s*=\s*(.*)$/m.exec(text);
     assert.ok(m, file);
-    assert.deepEqual([...m[1].matchAll(/\(([\d.]+),\s*"(\w+)",\s*"(\w+)"\)/g)].map(x => [Number(x[1]), x[2], x[3]]), [[62, 'qwen', 'IQ3_S'], [46, 'qwen', 'IQ3_XXS'], [38, 'swift', 'IQ2_XS']], file);
+    assert.deepEqual([...m[1].matchAll(/\(([\d.]+),\s*"(\w+)",\s*"(\w+)"\)/g)].map(x => [Number(x[1]), x[2], x[3]]), [[46, 'qwen', 'IQ3_XXS'], [38, 'swift', 'IQ2_XS']], file);
   }
 });
 

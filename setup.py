@@ -4080,7 +4080,7 @@ STRIX_HALO_FAMILY, STRIX_HALO_MODEL = "unsloth", "UD-IQ4_XS"    # the model docs
 STRIX_HALO_MIN_GB = 80         # UD-IQ4_XS keeps all of its experts in memory from ~80 GB (its menu line says so)
 
 
-RECOMMENDED_SIZES = {"qwen": ("IQ3_S",), "swift": ("IQ3_S",), "unsloth": ("UD-Q4_K_XL", "UD-IQ4_XS")}   # owner's pick, 0.1.44
+RECOMMENDED_SIZES = {"qwen": ("IQ3_XXS",), "swift": ("IQ3_XXS",), "unsloth": ("UD-Q4_K_XL", "UD-IQ4_XS")}   # owner's pick: IQ3_XXS since 2026-11-01 (0.1.44 had IQ3_S)
 
 
 def mem_have(model: str, ram: float, vram: float = 0.0) -> float:
@@ -4090,11 +4090,13 @@ def mem_have(model: str, ram: float, vram: float = 0.0) -> float:
 
 
 # 0.2.0, the owner's memory tiers (README "The other sizes"): RAM + VRAM together pick the size.  The floors sit 2 GB
-# below the tiers' names (40 / 48 / 64 GB) because the OS reports a little less than the installed memory.  64 GB and
-# up: IQ3_S (the original; Swift 1.5's IQ3_S is an equal choice), 48 GB: IQ3_XXS, 40 GB: Swift 1.5's IQ2_XS, with Gyro-M
-# (35 GB) as the other choice.  Below 40 GB the older rules stand (Gyro-S, or the Coder for code).  The Mac has its own
-# rules (strata_control/mac_fit.py).  tools/strata_mcp.py's recommend() holds the same floors (the app and `strata launch`).
-MEMORY_TIERS = ((62.0, "qwen", "IQ3_S"), (46.0, "qwen", "IQ3_XXS"), (38.0, "swift", "IQ2_XS"))
+# below the tiers' names (40 / 48 GB) because the OS reports a little less than the installed memory.  48 GB and up:
+# IQ3_XXS (the default, the 3rd size in the menu), 40 GB: Swift 1.5's IQ2_XS, with Gyro-M (35 GB) as the other choice.
+# 0.2.0's 64 GB tier (IQ3_S, the original; Swift 1.5's IQ3_S is an equal choice) left the tiers on 2026-11-01 (the
+# owner's call): IQ3_S stays a choice in the menu, about 15% slower than IQ3_XXS and 7 GB more RAM.  Below 40 GB the
+# older rules stand (Gyro-S, or the Coder for code).  The Mac has its own rules (strata_control/mac_fit.py).
+# tools/strata_mcp.py's recommend() holds the same floors (the app and `strata launch`).
+MEMORY_TIERS = ((46.0, "qwen", "IQ3_XXS"), (38.0, "swift", "IQ2_XS"))
 # #3425 (owner's rule): the tiers count RAM + VRAM less this much, which Windows and the system keep for themselves.  A PC
 # with a 16 GB card and 32 GB of RAM used to land in the 48 GB tier and then read ~11 GB of it from the SSD on every answer.
 # tools/strata_mcp.py has the same constant; the Mac (strata_control/mac_fit.py) keeps its own macOS share and does not use it.
@@ -4143,8 +4145,8 @@ def size_tag(family: str, m: str, installed: str | None = None) -> str:
 
 def installed_size(family: str, names: list, have: list) -> str | None:
     """0.1.44.1: the size of this family that is already installed (the most recently used config first), or None.  Setup
-    run again (SETUP.bat, --setup) pre-selects it: the 0.1.44 recommendation (IQ3_S, about 15% slower than IQ3_XXS and
-    7 GB more RAM) is for a first install, and Enter must not move an installed model to another size."""
+    run again (SETUP.bat, --setup) pre-selects it: the tier's pick (IQ3_XXS) is for a first install, and Enter must not
+    move an installed model to another size."""
     for c in have:
         try:
             ch = choices_from_config(c)

@@ -225,11 +225,12 @@ class ModelStep(Base):
             for col in ("Model", "Download", "Needs (RAM + VRAM)", "On this computer"):
                 self.assertIn(col, t)
             self.assertIn("IQ3_XXS", t)
-            line = next(l for l in t.splitlines() if "Qwen3.8-Flash-Next IQ3_S" in l)     # 64 GB + 12 GB: the 64 GB tier
+            line = next(l for l in t.splitlines() if "Qwen3.8-Flash-Next IQ3_S" in l)     # a choice since 2026-11-01, no longer the default
             self.assertIn("84 GB", line)                              # setup.py's download_gb 83.6
             self.assertIn("51 GB", line)                              # the app's figure: experts 50.3 + 1 GB, RAM + VRAM together
-            self.assertIn("(recommended)", line)
-            self.assertIn("› ", line)                                 # the cursor starts on the recommendation
+            pick = next(l for l in t.splitlines() if "Qwen3.8-Flash-Next IQ3_XXS" in l)   # 64 + 12 GB: the tier preselects IQ3_XXS
+            self.assertIn("(recommended)", pick)
+            self.assertIn("› ", pick)                                 # the cursor starts on the recommendation
             self.assertIn("too big (can still try)", t)          # NVFP4: a warning, not a block
             big = next(l for l in t.splitlines() if "UD-Q5_K_XL" in l)
             self.assertIn("SSD ", big)                            # a model bigger than RAM says how much is read from the SSD, as the app does

@@ -118,7 +118,7 @@ FALLBACK_FAMILIES = {
               "tag": "nvfp4-"},
 }
 OWN_PATH_ENGINE = (0, 1, 45)   # the first engine that runs Qwen3.6-35B-A3B with pictures and parallel requests (setup.py MIN_ENGINE note)
-MEMORY_TIERS = ((62.0, "qwen", "IQ3_S"), (46.0, "qwen", "IQ3_XXS"), (38.0, "swift", "IQ2_XS"))   # as setup.py's: RAM + VRAM floors of the owner's 64 / 48 / 40 GB tiers
+MEMORY_TIERS = ((46.0, "qwen", "IQ3_XXS"), (38.0, "swift", "IQ2_XS"))   # as setup.py's: RAM + VRAM floors of the owner's 48 / 40 GB tiers
 # #3425 (owner's rule, same as setup.py's TIER_SYSTEM_RESERVE_GB): the floors count RAM + VRAM less the 5 GB Windows and the system keep
 TIER_SYSTEM_RESERVE_GB = 5.0
 GYRO_ROOM_GB = 4.0     # recommend() suggests a Gyro size only when VRAM + RAM exceed its memory figure by this much
@@ -1215,7 +1215,7 @@ class Strata:
                 "images": False, "sizes": sizes}
 
     def recommend(self, hw: dict) -> dict:
-        """setup.py's own rules: the size it preselects (IQ3_XXS from 60 GB of RAM, else the first, Q2_0), the
+        """setup.py's own rules: the size it preselects (IQ3_XXS from 46 GB of RAM + VRAM, else the first, Q2_0), the
         Coder below the full model's RAM (setup's RAM table), the low-RAM mode when the GPU makes up for the RAM, and
         the context it preselects for the card's VRAM (32K under 14 GB, 64K under 20 GB, else 128K)."""
         models, families, _ctx, _src = self.tables()
@@ -1252,8 +1252,8 @@ class Strata:
                        + ("; Gyro-M (35 GB) is the other choice there, close to IQ3_XXS in quality but 16-21% slower at "
                           "writing answers than Q2_0" if "Gyro-M" in models and best.get("vendor") in ("nvidia", "amd", "intel") else ""))
             elif model == "IQ3_XXS":
-                why = f"{total}, the 48 GB tier: IQ3_XXS (better quality, slower)"
-            else:
+                why = f"{total}, the 48 GB tier and up: IQ3_XXS (better quality, slower)"
+            else:   # IQ3_S, if a tier names it again (0.2.0's 64 GB tier, dropped 2026-11-01)
                 why = (f"{total}, the 64 GB tier: IQ3_S (matches the full model, the slowest); Swift 1.5's IQ3_S is an "
                        "equal choice")
         elif ram >= 60:
