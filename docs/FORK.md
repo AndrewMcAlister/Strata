@@ -9,9 +9,9 @@ carrying a diverging branch forever.
 
 | | |
 |---|---|
-| Upstream | `Niko1221/Strata`, `upstream/main` = `4b9e05a2` (25 Oct 2026) |
+| Upstream | `Niko1221/Strata`, `upstream/main` = `870aedd9` (v0.2.8, 29 Oct 2026) |
 | Fork | `AndrewMcAlister/Strata`, `origin/develop` |
-| Last merge | `c16a44f2` (27 Oct 2026), closing a 2,337-commit gap |
+| Last rebase | `870aedd9` (31 Oct 2026): the fork's 14 commits replayed on v0.2.8; the old merge `c16a44f2` is gone |
 | Working branch | `develop` only. `main` mirrors `upstream/main` and is unused. |
 
 ## What this fork adds
