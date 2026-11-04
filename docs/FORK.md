@@ -385,9 +385,15 @@ or in the server code that uses it; those names exist only in the client.
 - `GET /cache` lists each block's name, size, the time Strata stored it and last used it, and how often -
   never the text. `GET /cache/<key>` returns one block's text with the same figures.
 - `{{cache:NAME}}` in a message (or in the text part of a message with images) is replaced by the block's
-  text before the prompt is rendered. A name the store does not hold is a **400**, never the literal
-  placeholder sent to the model: a client that forgot to store its card learns it from the answer, and the
-  model never sees `{{cache:`.
+  text before the prompt is rendered. A request that *names* a block (`cache_pin`, `cache_system` or
+  `cache_client`) is using them, so a name the store does not hold is a **400**: a client that forgot to
+  store its card learns it from the answer. A request that names none of the three is not using blocks,
+  and text that is not a stored name is a **quote** — a README that documents the syntax, a document an
+  agent is reading — and is sent as it was written, never refused. (4 Nov 2026: a 400 there stopped an
+  agent's task mid-run, on a README that mentions `{{cache:NAME}}`; the name is counted in `/metrics`
+  (`prompt_blocks.missing`) and said once per name in the log.) An agent that was mid-task does not die on
+  a document that mentions the syntax, and a client whose card failed to arrive still does not send the
+  placeholder to the model.
 - A reference counts as a *use*. When the store is full, the block used longest ago goes first - not the
   one stored longest ago, which would evict the long-lived preamble that every request uses in favour of a
   summary written a minute ago. Order is kept by a counter, so two blocks written in the same clock tick
@@ -428,8 +434,8 @@ The text that is genuinely new on every request (a client's own details and its 
 here) is not made cheaper by any of this, and it is what the remaining seconds are spent on. Keeping the
 part that changes last in the prompt leaves it the only part that has to be read again.
 
-**Verify:** `python -m unittest serve.test_server.NamedBlocks serve.test_server.CacheEndpoints -v` (16 tests),
-`python -m unittest serve.test_server` (377 tests, 113 s on this machine),
+**Verify:** `python -m unittest serve.test_server.NamedBlocks serve.test_server.CacheEndpoints -v` (18 tests),
+`python -m unittest serve.test_server` (386 tests, 116 s on this machine),
 `python -m unittest tools.test_strata_mcp` (53 tests; stop Strata first - the start/stop tests need port 8080
 free).
 

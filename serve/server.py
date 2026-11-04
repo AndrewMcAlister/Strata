@@ -5600,10 +5600,12 @@ class Service:
                     else:
                         part["source"] = str(image)
         fetched = self._note_unreadable_tool_images(messages, cancel)
-        # fork: {{cache:KEY}} -> the block's text, in place, before anything renders the messages.  A block that is not
-        # stored raises BlockError (a 400): the placeholder as literal text would reach the model as a strange token
-        # run, and the client would never learn that its card did not arrive.
-        blocks = self.blocks.expand(messages)
+        # fork: {{cache:KEY}} -> the block's text, in place, before anything renders the messages.  A request that
+        # names a block (cache_pin / cache_system / cache_client) is refused with a 400 when the store does not hold
+        # it: that client's card did not arrive, and it must learn so.  A request that names none of them is not
+        # using blocks, and a {{cache:NAME}} in its text is a quote (a README, a document an agent is reading),
+        # sent as it was written - a 400 there stopped an agent's task mid-run (strata: "the entity in the shed").
+        blocks = self.blocks.expand(messages, strict=self.blocks_named(req))
         ids = encoded_ids = self.encode_prompt(messages, tools, kwargs)
         if force and kwargs.get("enable_thinking", True) is False:
             ids = ids + self.tok.encode(force, parse_special=True)
@@ -5852,6 +5854,16 @@ class Service:
         return {"tokens": n}
 
     CACHE_ID_MAX = 200      # a cache_system / cache_client name: room for a UUID, never a prompt
+
+    BLOCK_FIELDS = ("cache_pin", "cache_system", "cache_client")
+
+    @classmethod
+    def blocks_named(cls, req) -> bool:
+        """True when the request names a block or a shared start (fork): the client is using prompt blocks, so a
+        `{{cache:NAME}}` the store does not hold is a 400 (serve/prompt_blocks.py) - it must learn its card did
+        not arrive.  False for a request that names none of them: it is not using blocks, and a `{{cache:NAME}}`
+        in its text is a quote (a README, a document an agent is reading), sent as it was written."""
+        return isinstance(req, dict) and any(req.get(f) is not None for f in cls.BLOCK_FIELDS)
 
     def cache_id(self, req, key) -> str | None:
         """One `cache_system` / `cache_client` value (fork): a short opaque name, or None when the field is absent.
@@ -8775,7 +8787,8 @@ def make_handler(svc: Service):
             messages, tools, kw = anthropic_to_messages(req, svc.anthropic_think_unasked)
             stop_strings(req)                                 # the same 400 as the request itself would get
             check_request_sampling(req)                       # ... likewise a sampling field of the wrong type
-            svc.blocks.expand(messages)                       # fork: {{cache:KEY}} counts as the text it stands for
+            # fork: {{cache:KEY}} counts as the text it stands for, under the same rule as the request itself
+            svc.blocks.expand(messages, strict=svc.blocks_named(req))
             self._json(200, {"input_tokens": len(svc.encode_prompt(messages, tools, kw, store=False))})
 
         def _anthropic(self, req):

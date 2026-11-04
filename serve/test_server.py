@@ -1939,14 +1939,43 @@ class NamedBlocks(unittest.TestCase):
         self.assertEqual(ids, svc.encode_prompt(msgs, None, {}))
         self.assertEqual(svc.blocks.entry("doc")["uses"], 1)             # the request counted as a use
 
-    def test_an_unknown_block_is_a_400_and_changes_nothing(self):
+    def test_a_request_that_names_a_block_is_refused_when_it_is_missing(self):
+        # cache_pin / cache_system / cache_client: the client is using blocks, so its card did not arrive and it
+        # must learn so rather than send the placeholder to the model as literal text.
         svc, _ = self.service()
-        msgs = [{"role": "user", "content": "{{cache:missing}}"}]
-        with self.assertRaises(ValueError) as e:
-            svc.prepare(msgs, None, {}, 16)
-        self.assertIn("missing", str(e.exception))
-        self.assertIn("POST /cache", str(e.exception))
-        self.assertEqual(msgs[0]["content"], "{{cache:missing}}")        # never sent as literal text
+        for req in ({"cache_pin": "missing"}, {"cache_system": "missing"}, {"cache_client": "client-a"}):
+            with self.subTest(req=req):
+                msgs = [{"role": "user", "content": "{{cache:missing}}"}]
+                with self.assertRaises(ValueError) as e:
+                    svc.prepare(msgs, None, {}, 16, req=req)
+                self.assertIn("missing", str(e.exception))
+                self.assertIn("POST /cache", str(e.exception))
+                self.assertEqual(msgs[0]["content"], "{{cache:missing}}")   # the prompt is left as it was
+        self.assertEqual(svc.blocks.missing, 0)
+
+    def test_a_document_quoting_the_syntax_is_text_in_a_request_that_names_no_block(self):
+        # The regression this test is for: an agent read a README that mentions the syntax (this repository's does,
+        # section 12), the placeholder arrived in a tool result, and the whole task stopped with that 400.
+        svc, _ = self.service()
+        msgs = [{"role": "user", "content": "The README says: expand {{cache:NAME}} from it."}]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            ids, _, _ = svc.prepare(msgs, None, {}, 16)
+        self.assertEqual(msgs[0]["content"], "The README says: expand {{cache:NAME}} from it.")
+        self.assertEqual(ids, svc.encode_prompt(msgs, None, {}))
+        self.assertEqual(svc.blocks.missing, 1)
+        self.assertIn("'NAME'", out.getvalue())                          # said once, in the log
+        self.assertIn("sent as it was written", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as again:
+            svc.prepare([{"role": "user", "content": "{{cache:NAME}}"}], None, {}, 16)
+        self.assertNotIn("'NAME'", again.getvalue())                     # once per name, not once per request
+        self.assertEqual(svc.blocks.missing, 2)
+
+    def test_a_stored_block_still_expands_without_the_named_fields(self):
+        svc, _ = self.service()
+        svc.blocks.put("doc", "DOC")
+        msgs = [{"role": "user", "content": "a {{cache:doc}} b"}]
+        svc.prepare(msgs, None, {}, 16)
+        self.assertEqual(msgs[0]["content"], "a DOC b")
 
     def test_the_pin_sits_where_the_named_block_ends(self):
         svc, tok = self.service()
@@ -2031,7 +2060,8 @@ class NamedBlocks(unittest.TestCase):
 
 class CacheEndpoints(unittest.TestCase):
     """Fork: POST /cache stores a block, GET /cache lists them and GET /cache/<key> returns one; a request that refers
-    to a block gets its text, and one that refers to a name the server does not hold is a 400."""
+    to a stored block gets its text; a request that names a block it does not hold (cache_pin / cache_system /
+    cache_client) is a 400, and one that merely quotes the syntax is sent as it was written."""
 
     @classmethod
     def setUpClass(cls):
@@ -2085,8 +2115,10 @@ class CacheEndpoints(unittest.TestCase):
                                                    "max_tokens": 4})[1]
         self.assertGreater(out["usage"]["prompt_tokens"], plain["usage"]["prompt_tokens"] + 100)
         self.call("/cache", {"key": "card", "delete": True})
-        code, out = self.call("/v1/chat/completions", body)              # the store no longer holds it
-        self.assertEqual(code, 400, out)
+        code, out = self.call("/v1/chat/completions", body)              # a plain request: the words are sent as written
+        self.assertEqual(code, 200, out)
+        code, out = self.call("/v1/chat/completions", {**body, "cache_client": "client-a"})
+        self.assertEqual(code, 400, out)                                 # a block client: its card did not arrive
         self.assertIn("card", out["error"]["message"])
 
 
