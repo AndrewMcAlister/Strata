@@ -9,9 +9,9 @@ carrying a diverging branch forever.
 
 | | |
 |---|---|
-| Upstream | `Niko1221/Strata`, `upstream/main` = `870aedd9` (v0.2.8, 29 Oct 2026) |
+| Upstream | `Niko1221/Strata`, `upstream/main` = `ffa80d73` (v0.2.10, 2 Nov 2026) |
 | Fork | `AndrewMcAlister/Strata`, `origin/develop` |
-| Last rebase | `870aedd9` (31 Oct 2026): the fork's 14 commits replayed on v0.2.8; the old merge `c16a44f2` is gone |
+| Last rebase | `ffa80d73` (5 Nov 2026): the fork's 17 commits replayed on v0.2.10; conflicts in `setup.py`, `serve/server.py` and `tests/terminal/test_launch.py` resolved by hand (upstream's `ContextOverflow` and `mmproj_beside` kept beside the fork's own), and the engine rebuilt as 0.1.56 |
 | Working branch | `develop` only. `main` mirrors `upstream/main` and is unused. |
 
 ## What this fork adds
