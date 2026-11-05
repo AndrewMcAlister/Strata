@@ -65,6 +65,14 @@ if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\serve\server.
 if not defined ROOT goto noroot
 if not defined QUIET echo  Strata folder: %ROOT%
 
+rem --- a Windows service owns Strata when it runs --------------------------------------------------
+rem A service's processes belong to SYSTEM, and Get-CimInstance hides their ExecutablePath and CommandLine from
+rem a normal account: the probe below then finds nothing and says "not running" while the service is serving.
+rem The SCM answers a normal account, so ask it first, and stop the model through the service that owns it.
+set "SVCN=Strata"
+sc query "%SVCN%" 2>nul | findstr /r /c:"STATE.*RUNNING" >nul
+if not errorlevel 1 goto service_running
+
 rem --- the part that needs to look at other processes lives in PowerShell -----------------------
 rem cmd cannot list processes by path, so the probe below is written to a temporary .ps1 file next
 rem to the batch and run with -File.  Writing it as a file, instead of passing it on the command
@@ -331,6 +339,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -M
 set "CODE=%ERRORLEVEL%"
 del "%PSFILE%" >nul 2>nul
 exit /b %CODE%
+
+rem --- the service is the owner -------------------------------------------------------------------
+rem Its processes cannot be seen from here (they are SYSTEM's), so a stop goes through the service.  That needs
+rem Administrator rights, asked for the same way Scripts\Strata_Service.ps1 asks: the start of the elevated
+rem python, with the result of the stop as this script's exit code.
+:service_running
+if /i "%MODE%"=="status" (
+    echo.
+    echo  Strata is running as the Windows service "%SVCN%".
+    echo    address  http://127.0.0.1:8080/
+    echo.
+    echo  Strata_Stop.bat stops it; Administrator rights are asked for then.
+    echo.
+    exit /b 0
+)
+if /i "%MODE%"=="help" goto help
+echo.
+echo  Strata runs as the Windows service "%SVCN%", so its processes belong to SYSTEM and cannot be seen
+echo  from here.  Stopping the service needs Administrator rights: asking for them now.
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $p = Start-Process -FilePath '%ROOT%\.venv\Scripts\python.exe' -ArgumentList '%ROOT%\Scripts\Strata_Service.py','stop','--name','%SVCN%' -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode } catch { Write-Host 'Administrator rights were not given, so the service is still running.'; exit 1 }"
+set "SVCCODE=%ERRORLEVEL%"
+echo.
+if "%SVCCODE%"=="0" echo  Strata stopped: the service is stopped and the model has ended.
+if not "%SVCCODE%"=="0" echo  The service was not stopped (exit code %SVCCODE%).
+exit /b %SVCCODE%
 
 rem --- the script has to say what it does when it cannot do it -----------------------------------
 :help

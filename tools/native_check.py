@@ -10,14 +10,16 @@ after it started, so the server reports "the engine exited before it was ready" 
 not loaded.  Nothing else says which of the checks it was.
 
   architecture  include/strata/artifact/gguf_reader.hpp:588  general.architecture == "qwen4exp" + the geometry
-  token_embd    src/core/native_head.cpp:123                 in --native, 2-D [2560, 248320], an IQ encoding
+  token_embd    src/core/native_head.cpp:123                 in --native, 2-D [2560, 248320], a supported encoding
   PLE table     src/kernels/ngram.cpp:249                    in --ple-gguf, IQ4_NL, rows of 160 values
   --ple-gguf    src/program/generate.cpp:2537                required unless --no-ple says it is an ablation
 
-The IQ encodings are `is_iq()` in src/kernels/cuda/iq_kernels.cu:1917.  A k-quant embedding has no kernel
-there: the unsloth "UD" releases store `token_embd.weight` as Q6_K (their UD-Q4_K_XL files as Q8_0), so those
-shards can be packed but cannot start the engine.  The releases whose `token_embd.weight` is an IQ encoding -
-the GSQ-RCO files setup downloads, and OrcaRouter's IQ3_XXS - are the ones this engine runs.
+The encodings accepted below are the ones the engine's embedding path dequantizes: `dq_dispatch` in
+src/kernels/cuda/iq_kernels.cu has a case for each (the IQ ones, and Q8_0 as `case 8: dq_q8_0`), and
+src/core/native_head.cpp handles type_ == 8 for the head too.  An encoding outside that list has no kernel
+there, so its shard can be packed but cannot start the engine.  Q8_0 was added on 2026-11-05: an Unsloth
+UD-Q4_K_XL stores `token_embd.weight` as Q8_0, engine 0.1.56 loaded it and printed READY, and this check had
+refused it as "a k-quant embedding".
 
 Headers only, nothing written.  Exit code 0 when the engine can load the model, 1 with the failing check when
 it cannot.
@@ -44,13 +46,20 @@ PLE_HEAD_DIM = 160                                # include/strata/kernels/ngram
 GEOMETRY = (("qwen4exp.block_count", 48), ("qwen4exp.embedding_length", N_EMBD),
             ("qwen4exp.attention.head_count", 24), ("qwen4exp.attention.head_count_kv", 2))
 PRESENT_ONLY = ("qwen4exp.expert_count", "qwen4exp.expert_used_count")   # 0 in the guard: pruned variants ship less
-# is_iq() in src/kernels/cuda/iq_kernels.cu:1917, spelled as tools/gguf_reader.py spells those type ids
+# is_iq() in src/kernels/cuda/iq_kernels.cu, spelled as tools/gguf_reader.py spells those type ids
 IQ_TYPES = ("Q2_0", "Q3_K", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ3_XXS", "IQ3_S", "IQ4_NL", "IQ4_XS")
-IQ_SOURCE = "is_iq() in src/kernels/cuda/iq_kernels.cu:1917"
+IQ_SOURCE = "is_iq() in src/kernels/cuda/iq_kernels.cu"
+# The embedding path takes one more.  Q8_0 is not in is_iq(), but dq_dispatch has `case 8: dq_q8_0` and
+# src/core/native_head.cpp handles type_ == 8 for the head too.  Unsloth's UD-Q4_K_XL stores token_embd.weight as
+# Q8_0 and engine 0.1.56 loads it (measured 2026-11-05: mapped host memory, then READY), so the token_embd check
+# below takes these.  IQ_TYPES keeps mirroring is_iq() exactly - tools/test_native_check.py checks that it does.
+EMBED_TYPES = IQ_TYPES + ("Q8_0",)
+EMBED_SOURCE = IQ_SOURCE + ", and id 8 through dq_dispatch's `case 8: dq_q8_0`"
 EMBED_MESSAGE = ("native embedding: token_embd.weight is absent, of another shape, or of a type without a GPU "
                  "dequantizer")
-REMEDY = ("this engine runs models whose token_embd.weight is an IQ encoding - the GSQ-RCO releases setup "
-          "downloads and OrcaRouter's IQ3_XXS (docs/ORCA.md) - not a k-quant embedding")
+REMEDY = ("this engine runs models whose token_embd.weight has a GPU dequantizer - the IQ encodings it always "
+          "took (the GSQ-RCO releases setup downloads, OrcaRouter's IQ3_XXS in docs/ORCA.md) and, since engine "
+          "0.1.56, Q8_0 (Unsloth's UD-Q4_K_XL)")
 SHARD_RE = re.compile(r"^(?P<stem>.+)-(?P<no>\d{5})-of-(?P<count>\d{5})\.gguf$", re.IGNORECASE)
 
 
@@ -268,9 +277,9 @@ def check(native=None, ple=None, pack=None, n_embd: int = N_EMBD, n_vocab: int =
         if len(embed.shape) != 2 or embed.shape[0] != n_embd or embed.shape[1] != n_vocab:
             r.problems.append("token_embd.weight is %s, not [%d, %d] (src/core/native_head.cpp:123)"
                               % (embed.shape, n_embd, n_vocab))
-        if embed.type_name not in IQ_TYPES:
+        if embed.type_name not in EMBED_TYPES:
             r.problems.append("token_embd.weight is %s, and the GPU dequantizer has no kernel for it (%s takes %s)"
-                              % (embed.type_name, IQ_SOURCE, ", ".join(IQ_TYPES)))
+                              % (embed.type_name, EMBED_SOURCE, ", ".join(EMBED_TYPES)))
         if n_embd % 256:
             r.problems.append("n_embd %d is not a multiple of 256 (src/core/native_head.cpp:124)" % n_embd)
         if len(r.problems) == before:

@@ -45,6 +45,12 @@ from Task Manager.
   `/window`, `/noopen`.
 - `Strata_DefaultModel.ps1` is the start script's source of "what is the default model";
   the script calls it if present.
+- When **the Windows service** owns Strata, `Strata_Stop.bat` asks the SCM instead of the
+  process probe. A service's processes are SYSTEM's, and `Get-CimInstance` hides their
+  `ExecutablePath` and `CommandLine` from a normal account, so the probe found nothing and
+  reported "Strata is not running" while the service was serving (2026-11-05). `/status`
+  now names the service, and a stop goes through `Strata_Service.py stop` with the
+  Administrator rights it needs; the exit code is the stop's.
 
 The stop order is the whole point: the engine blocks on the server's input, so the server
 must die first for the arena to be released.
@@ -53,17 +59,26 @@ must die first for the arena to be released.
 
 ## 2. Pre-load model check
 
-An unsloth "UD" GGUF can be packed but can never start the engine, and the only symptom
-was `native embedding: ...` in the log about a second after start.
+A GGUF whose `token_embd.weight` the engine cannot dequantize can be packed but can
+never start the engine, and the only symptom was `native embedding: ...` in the log
+about a second after start.
 
 - `tools/native_check.py` reads GGUF headers only. It checks `token_embd.weight` (must be
-  an encoding `is_iq()` handles) and `per_layer_token_embd.weight` (must be IQ4_NL), plus
+  an encoding the embedding path dequantizes: the IQ ones and, since engine 0.1.56, Q8_0)
+  and `per_layer_token_embd.weight` (must be IQ4_NL), plus
   the vision encoder, and returns problems with a remedy.
 - `tools/gguf_inventory.py` lists a shard's tensors, types and offsets without a model.
 - The `serve/server.py` hook runs `check_config(cfg)` in the `--engine strata` branch,
   after the card-role lines and before anything loads, and fails with the reason.
   `serve/server.py` already puts `ROOT/tools` on `sys.path`.
 - `docs/ORCA.md`'s native-check note was folded into this file instead of upstream's.
+- 2026-11-05: Unsloth's UD-Q4_K_XL stores `token_embd.weight` as Q8_0, and engine 0.1.56
+  loads it (mapped host memory, then READY) - the refusal was this check's, not the
+  engine's, so Q8_0 joined the accepted encodings. Its setup-written config also needed
+  `--native` on **shard 2** and `--ple-gguf` on **shard 4**: this download's shards are
+  re-split (same 103.69 GiB total, different boundaries), so `token_embd.weight` is not
+  in shard 1 and setup's assumed layout is wrong. Check any re-split set with
+  `python tools/gguf_inventory.py --gguf <shard 1>` before trusting its config.
 
 **Verify:** `python -m pytest tools/test_native_check.py -q` (17 tests).
 
