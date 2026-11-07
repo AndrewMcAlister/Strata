@@ -39,7 +39,13 @@ a 140K run on the same machine measured the same 13.7 tok/s as the 70K run.
 Run `restore.cmd` in this folder, or by hand:
 
     copy /Y D:\Strata\snapshots\known-good-30tps\strata-unsloth-ud-q4_k_xl-dflash2-tuned-70k.json D:\Strata\
-    D:\Strata\Scripts\Strata_Start.bat /restart /window /noopen /newest
+    D:\Strata\Scripts\Strata_Stop.bat /force
+    start "Strata" /D "D:\Strata" "D:\Strata\Scripts\start-server-70k.cmd"
+
+`Strata_Start.bat /restart` is avoided on purpose: while the agent's MCP tool
+servers run (`tools\filesystem_mcp.py`, `tools\web_search_mcp.py` share
+`.venv\Scripts`), its stop probe counts them as leftovers, kills the server and
+then refuses to start a replacement.
 
 ## Known headroom at the time of the snapshot
 
