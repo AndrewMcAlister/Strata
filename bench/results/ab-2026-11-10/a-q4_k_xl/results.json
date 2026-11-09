@@ -1,0 +1,174 @@
+[
+  {
+    "label": "warmup",
+    "expected_prompt_tokens": null,
+    "request_sha256": "b63e57873441a996a529b246a66cf12de70a7c671777f99329354d5c195f788f",
+    "client_ttft_s": 1.3889198000033502,
+    "client_elapsed_s": 1.5545882000005804,
+    "finish_reason": "stop",
+    "usage": {
+      "prompt_tokens": 19,
+      "completion_tokens": 2,
+      "total_tokens": 21,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "7645a6b88932",
+      "projection": null,
+      "time": 1794226153.3093238,
+      "duration_s": 1.5,
+      "finish": "stop",
+      "prompt_tokens": 19,
+      "reused": 0,
+      "output_tokens": 2,
+      "first_engine_token_s": 1.371,
+      "prompt_total": 19,
+      "prompt_read": 19,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 2,
+      "prompt_ms": 1327.2,
+      "decode_ms": 208.7,
+      "decode_tok_s": 9.6,
+      "hit_rate": 0.242,
+      "pcie_share": 0.029,
+      "ram_blobs": 880,
+      "file_blobs": 104,
+      "file_mb": 200.1,
+      "drafts_offered": 5,
+      "drafts_accepted": 1
+    },
+    "text": "READY"
+  },
+  {
+    "label": "tokens-70000-run-1",
+    "expected_prompt_tokens": 70000,
+    "request_sha256": "c6d9f07b1cb9f45a497ba38eecee787e43668d93cf9ec55aa9a1b800f6bb2fcf",
+    "client_ttft_s": 101.12880040000164,
+    "client_elapsed_s": 111.09375670000009,
+    "finish_reason": "length",
+    "usage": {
+      "prompt_tokens": 70000,
+      "completion_tokens": 256,
+      "total_tokens": 70256,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "f9939a92028b",
+      "projection": null,
+      "time": 1794226155.4622827,
+      "duration_s": 111.1,
+      "finish": "length",
+      "prompt_tokens": 70000,
+      "reused": 0,
+      "output_tokens": 256,
+      "first_engine_token_s": 101.086,
+      "prompt_total": 70000,
+      "prompt_read": 70000,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 256,
+      "prompt_ms": 101033.1,
+      "decode_ms": 10005.0,
+      "decode_tok_s": 25.6,
+      "hit_rate": 0.519,
+      "pcie_share": 0.018,
+      "ram_blobs": 43576,
+      "file_blobs": 2512,
+      "file_mb": 5862.4,
+      "drafts_offered": 200,
+      "drafts_accepted": 156
+    },
+    "text": "The provided Python module represents a synthetic benchmark designed to evaluate the performance, correctness, and maintainability of code generation or execution systems. It consists of a series of functions, labeled `task_00000` through `task_01873`, each implementing a specific deterministic integer transform. This analysis explores the mathematical underpinnings, structural design, computational complexity, and software engineering implications of this module.\n\n### Mathematical Foundation: Deterministic Transforms and Modulo Arithmetic\n\nAt its core, every function in this module performs an affine transformation on an input integer `value`. The general form of the operation is defined as:\n\n$$ f(x) = (a \\cdot x + b) \\pmod m $$\n\nWhere:\n*   $x$ is the input integer (`value`).\n*   $a$ is a multiplier coefficient.\n*   $b$ is an additive constant.\n*   $m$ is the modulus, fixed at `100003` for all functions in this series.\n\nThe choice of `100003` as the modulus is significant. It is a prime number, which ensures that the ring of integers modulo 100003 forms a field"
+  },
+  {
+    "label": "tokens-70000-run-2",
+    "expected_prompt_tokens": 70000,
+    "request_sha256": "be96d959f98e6c204714c45f7ffc0842f39da237b834b28159f5816f255cae84",
+    "client_ttft_s": 100.56702960000257,
+    "client_elapsed_s": 108.07083309999871,
+    "finish_reason": "length",
+    "usage": {
+      "prompt_tokens": 70000,
+      "completion_tokens": 256,
+      "total_tokens": 70256,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "7c0c25767fbc",
+      "projection": null,
+      "time": 1794226267.147509,
+      "duration_s": 108.0,
+      "finish": "length",
+      "prompt_tokens": 70000,
+      "reused": 0,
+      "output_tokens": 256,
+      "first_engine_token_s": 100.515,
+      "prompt_total": 70000,
+      "prompt_read": 70000,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 256,
+      "prompt_ms": 100477.2,
+      "decode_ms": 7529.5,
+      "decode_tok_s": 34.0,
+      "hit_rate": 0.61,
+      "pcie_share": 0.013,
+      "ram_blobs": 38340,
+      "file_blobs": 800,
+      "file_mb": 2095.7,
+      "drafts_offered": 194,
+      "drafts_accepted": 150
+    },
+    "text": "The provided Python module represents a synthetic benchmark designed to evaluate the performance, correctness, and maintainability of code generation or execution systems. It consists of a series of functions, labeled `task_00000` through `task_01873`, each implementing a specific deterministic integer transform. While the individual functions appear simple, their collective structure offers rich insights into algorithmic design, modular arithmetic, and software engineering principles.\n\n### Deterministic Integer Transforms and Modular Arithmetic\n\nAt the core of every function in this module is a linear congruential-like transformation defined by the formula:\n$$ f(x) = (a \\cdot x + b) \\pmod m $$\nwhere $x$ is the input `value`, $a$ is a multiplier, $b$ is an additive constant, and $m$ is the modulus 100,003.\n\nThe choice of 100,003 as the modulus is significant. It is a prime number, which ensures that for any non-zero multiplier $a$, the transformation is bijective (one-to-one) within the range $[0, m-1]$. This property is crucial for cryptographic applications or hash functions where collision resistance and reversibility are"
+  },
+  {
+    "label": "tokens-70000-run-3",
+    "expected_prompt_tokens": 70000,
+    "request_sha256": "bc3325fab588f1f6de4c78fa2b24c8bfbbcafc9dd87dacf835322725b942ffb6",
+    "client_ttft_s": 99.4391248000029,
+    "client_elapsed_s": 107.14578610000171,
+    "finish_reason": "length",
+    "usage": {
+      "prompt_tokens": 70000,
+      "completion_tokens": 256,
+      "total_tokens": 70256,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "260406b4252a",
+      "projection": null,
+      "time": 1794226375.7727714,
+      "duration_s": 107.1,
+      "finish": "length",
+      "prompt_tokens": 70000,
+      "reused": 0,
+      "output_tokens": 256,
+      "first_engine_token_s": 99.398,
+      "prompt_total": 70000,
+      "prompt_read": 70000,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 256,
+      "prompt_ms": 99357.8,
+      "decode_ms": 7734.1,
+      "decode_tok_s": 33.1,
+      "hit_rate": 0.638,
+      "pcie_share": 0.01,
+      "ram_blobs": 35610,
+      "file_blobs": 585,
+      "file_mb": 1487.3,
+      "drafts_offered": 160,
+      "drafts_accepted": 136
+    },
+    "text": "The provided Python module represents a synthetic benchmark designed to evaluate the performance, correctness, and maintainability of code generation or execution systems. It consists of a series of functions, labeled `task_00000` through `task_01873`, each implementing a specific deterministic integer transform. While the individual functions are trivial in isolation, their collective structure offers a rich case study for discussing algorithmic patterns, modular arithmetic, and software engineering principles.\n\n### Deterministic Integer Transforms and Modulo Arithmetic\n\nAt the core of every function in this module is a linear congruential-style transformation: `(value * multiplier + addend) % 100003`. This formula is deterministic, meaning that for any given input `value`, the output will always be identical across different runs and environments. The modulus used, `100003`, is a prime number. In computer science and cryptography, using a prime modulus is significant because it ensures that the multiplicative group of integers modulo $p$ has specific algebraic properties, such as the existence of modular inverses for all non-zero elements. This prevents certain types of collisions or degenerate behaviors that might occur with composite moduli.\n\nThe parameters `multiplier` and `"
+  }
+]

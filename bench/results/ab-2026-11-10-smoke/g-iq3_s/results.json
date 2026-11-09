@@ -1,0 +1,88 @@
+[
+  {
+    "label": "warmup",
+    "expected_prompt_tokens": null,
+    "request_sha256": "b63e57873441a996a529b246a66cf12de70a7c671777f99329354d5c195f788f",
+    "client_ttft_s": 0.5440711999981431,
+    "client_elapsed_s": 0.6152284999989206,
+    "finish_reason": "stop",
+    "usage": {
+      "prompt_tokens": 19,
+      "completion_tokens": 2,
+      "total_tokens": 21,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "64daf5490d01",
+      "projection": null,
+      "time": 1794226026.8429966,
+      "duration_s": 0.6,
+      "finish": "stop",
+      "prompt_tokens": 19,
+      "reused": 0,
+      "output_tokens": 2,
+      "first_engine_token_s": 0.529,
+      "prompt_total": 19,
+      "prompt_read": 19,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 2,
+      "prompt_ms": 509.6,
+      "decode_ms": 89.6,
+      "decode_tok_s": 22.3,
+      "hit_rate": 0.286,
+      "pcie_share": 0.028,
+      "ram_blobs": 0,
+      "file_blobs": 0,
+      "file_mb": 0,
+      "drafts_offered": 4,
+      "drafts_accepted": 1
+    },
+    "text": "READY"
+  },
+  {
+    "label": "tokens-512-run-1",
+    "expected_prompt_tokens": 511,
+    "request_sha256": "3465c84936261a3a0f7c63795eca8de3916ba26b6a595d0348630738fefe1cd5",
+    "client_ttft_s": 2.1847363999986555,
+    "client_elapsed_s": 5.8028064999962226,
+    "finish_reason": "length",
+    "usage": {
+      "prompt_tokens": 511,
+      "completion_tokens": 256,
+      "total_tokens": 767,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "engine": {
+      "id": "8a3a184a5e2e",
+      "projection": null,
+      "time": 1794226027.6211865,
+      "duration_s": 5.8,
+      "finish": "length",
+      "prompt_tokens": 511,
+      "reused": 0,
+      "output_tokens": 256,
+      "first_engine_token_s": 2.182,
+      "prompt_total": 511,
+      "prompt_read": 511,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 256,
+      "prompt_ms": 2165.7,
+      "decode_ms": 3633.8,
+      "decode_tok_s": 70.4,
+      "hit_rate": 0.694,
+      "pcie_share": 0.007,
+      "ram_blobs": 0,
+      "file_blobs": 0,
+      "file_mb": 0,
+      "drafts_offered": 185,
+      "drafts_accepted": 141
+    },
+    "text": "The provided Python module represents a synthetic benchmark suite designed to evaluate the performance and correctness of deterministic integer transformations. The code consists of a series of functions, labeled `task_00000` through `task_00012`, each implementing a specific linear congruential-like transformation followed by a modulo operation. This analysis explores the mathematical underpinnings, structural design, testing implications, and maintainability considerations of this code snippet.\n\n### Deterministic Integer Transforms and Modulo Arithmetic\n\nAt its core, every function in this module performs a deterministic integer transform. A deterministic transform is a function where the output is entirely determined by the input; there are no random elements, side effects, or external state dependencies. For any given input `value`, the output will always be the same across different executions and environments (assuming standard Python integer behavior).\n\nThe general pattern observed in these functions is:\n$$ f_n(v) = (v \\cdot a_n + b_n) \\pmod{100003} $$\n\nWhere $a_n$ and $b_n$ are coefficients that increase linearly with the task index $n$. Specifically, for `task_XXXXX`, the multiplier is $(n+1)$ and the"
+  }
+]

@@ -1,0 +1,77 @@
+{
+  "service": "strata",
+  "model": "qwen3.8-flash-next-iq3_xxs",
+  "loaded": true,
+  "auto_load": true,
+  "structured_output": {
+    "formats": [
+      "json_object",
+      "json_schema"
+    ],
+    "method": "prompt_and_validate",
+    "constrained_decoding": false,
+    "stream_buffered": true
+  },
+  "engine": "0.1.56",
+  "started": 1794226012,
+  "uptime_s": 14,
+  "cache_max_tokens": 45056,
+  "context": {
+    "native": 45056,
+    "max_positions": 45056
+  },
+  "concurrency": {
+    "serving": 1,
+    "requested": 1
+  },
+  "dialects": [
+    "/v1/chat/completions",
+    "/v1/messages",
+    "/v1/responses"
+  ],
+  "vision": {
+    "enabled": true,
+    "available": true,
+    "error": null
+  },
+  "image_generation": {
+    "enabled": false
+  },
+  "activity": {
+    "requests": 1,
+    "in_flight": 0,
+    "last_request_at": 1794226015
+  },
+  "last_timings": {
+    "cache_n": 0,
+    "prompt_n": 53,
+    "prompt_ms": 782.4,
+    "prompt_per_token_ms": 14.762,
+    "prompt_per_second": 67.7,
+    "predicted_n": 1,
+    "predicted_ms": 30.5,
+    "predicted_per_token_ms": 30.5,
+    "predicted_per_second": 32.8,
+    "draft_n": 0,
+    "draft_n_accepted": 0,
+    "at": 1794226015
+  },
+  "vram": {
+    "elastic": false
+  },
+  "machine": {
+    "at": 1794226026,
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "used_mib": 14194.0,
+      "total_mib": 16303.0,
+      "util_pct": 1,
+      "temp_c": 51,
+      "power_w": 18.331
+    },
+    "ram": {
+      "used_gib": 52.7,
+      "total_gib": 62.8
+    }
+  }
+}
