@@ -351,15 +351,31 @@ if defined NEWEST goto banner
 echo.
 echo  More than one model is installed in this folder.  Choose the one to start:
 echo.
+rem The keys are LETTERS, not numbers.  choice /c takes one character per key and refuses a
+rem repeated one, so numbers break at the tenth model: "12345678910" repeats 1 and 0, and choice
+rem then answers "Duplicate choices are not allowed" to EVERY key, leaving no way to start.
+rem L1..LN hold each entry's letter; choice's errorlevel stays the entry's 1-based position, so
+rem the rest of this script keeps working in numbers.
+if %NCFG% gtr 26 (
+    echo  %NCFG% model configs are installed, and this menu holds 26 at most.
+    echo  Delete a strata-*.json you no longer use, then run this again.
+    exit /b 2
+)
+set "ALPHA=abcdefghijklmnopqrstuvwxyz"
+set "IDX=0"
+for /l %%i in (1,1,%NCFG%) do (
+    for %%A in (!IDX!) do set "L%%i=!ALPHA:~%%A,1!"
+    set /a IDX+=1
+)
 rem The names go through delayed expansion: a percent-expanded name is expanded before cmd looks
 rem for characters that mean something to it, so a name holding one would be taken as syntax.
 rem With delayed expansion the name is already a value by then and is printed as it is.
-for /l %%i in (1,1,%NCFG%) do echo    %%i. !MODEL%%i!
+for /l %%i in (1,1,%NCFG%) do echo    !L%%i!. !MODEL%%i!
 echo.
 :pickprompt
 rem A TIMED prompt. set /p waits for ever, which is wrong here twice over: a start at
 rem logon has nobody watching it, and a start from a shortcut that is ignored would hold
-rem the console open indefinitely. choice /t returns after ten seconds with the default,
+rem the console open indefinitely. choice /t returns after twenty seconds with the default,
 rem which is the model without --vision (see the DEF block below): vision loads a second
 rem engine and a 900 MB projector, VRAM an unattended start does not need, and the models
 rem that keep vision stay selectable. ORDER IS STILL NEWEST-FIRST, so the numbering can
@@ -376,9 +392,10 @@ if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
 if not defined DEF set "DEF=1"
 rem The key set is built from NCFG so choice can only accept a number that exists.
 set "KEYS="
-for /l %%i in (1,1,%NCFG%) do set "KEYS=!KEYS!%%i"
+for /l %%i in (1,1,%NCFG%) do set "KEYS=!KEYS!!L%%i!"
+set "DEFKEY=!L%DEF%!"
 set "SEL="
-choice /c !KEYS! /n /t 10 /d !DEF! /m "Start which model? [!DEF!, default in 10 seconds] "
+choice /c !KEYS! /n /t 20 /d !DEFKEY! /m "Start which model? [keys !KEYS:, default !DEFKEY!] "
 set "SEL=!ERRORLEVEL!"
 rem `choice` always answers, so SEL is always set; these lines stay as a guard for an
 rem older probe that emitted no NCFG, and for the Ctrl+C case where choice returns 0.
@@ -387,7 +404,7 @@ if "!SEL!"=="0" set "SEL=!DEF!"
 set "OK="
 for /l %%i in (1,1,%NCFG%) do if "!SEL!"=="%%i" set "OK=1"
 if defined OK goto picked
-echo  Enter a number from 1 to %NCFG%.
+echo  Press the letter shown beside the model you want.
 goto pickprompt
 :picked
 rem The chosen number picks the config, and with it the name and engine the banner and the

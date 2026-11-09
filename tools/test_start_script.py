@@ -77,8 +77,15 @@ class StrataStart(unittest.TestCase):
     def test_the_menu_prints_names_through_delayed_expansion(self):
         """%MODEL1% would be expanded before cmd looks for &, | or >, so a name holding one would be read
         as syntax rather than printed."""
-        self.assertGreater(line_of(r"echo    %%i. !MODEL%%i!"), -1)
+        self.assertGreater(line_of(r"echo    !L%%i!. !MODEL%%i!"), -1)
         self.assertEqual(line_of("echo    %%i. %MODEL%%i%"), -1)
+
+    def test_the_menu_keys_are_letters_not_numbers(self):
+        """choice /c refuses a repeated character, so numeric keys break at the tenth model:
+        "12345678910" repeats 1 and 0 and choice then rejects every key, leaving no way to start."""
+        self.assertGreater(line_of('set "KEYS=!KEYS!!L%%i!"'), -1)
+        self.assertEqual(line_of('set "KEYS=!KEYS!%%i"'), -1)
+        self.assertGreater(line_of('choice /c !KEYS! /n /t 20 /d !DEFKEY!'), -1)
 
     def test_a_cancelled_choice_takes_the_default(self):
         """`choice` returns 0 on Ctrl+C and on an ended input; the guard turns that into the default
@@ -90,7 +97,7 @@ class StrataStart(unittest.TestCase):
         self.assertLess(cancelled, line_of('for /l %%i in (1,1,%NCFG%) do if "!SEL!"=="%%i" set "OK=1"'))
 
     def test_a_wrong_answer_is_asked_for_again(self):
-        self.assertGreater(line_of('echo  Enter a number from 1 to %NCFG%.'), -1)
+        self.assertGreater(line_of('echo  Press the letter shown beside the model you want.'), -1)
 
     def test_the_choice_selects_the_config_the_name_and_the_engine(self):
         for var in ("CFG", "MODEL", "EXE"):
