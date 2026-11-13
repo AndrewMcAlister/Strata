@@ -41,6 +41,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# The starting flag (this folder's own module) is what stops two starters loading one card:
+# the server binds 8080 only after the model is in VRAM, so the port alone cannot tell
+# "nothing running" from "40 s into a load". A service that cannot see the module still
+# supervises the engine, so the failure is recorded rather than fatal.
+try:  # pragma: no cover - the import either works or it does not
+    import starting_flag
+except Exception as exc:  # noqa: BLE001 - a missing flag module must not stop the service
+    starting_flag = None
+    _STARTING_FLAG_ERROR = exc
+
 # The junction path is kept as written: a terminal archive is updated by retargeting
 # <install>\terminal\current, and resolving it here would register the versioned
 # folder instead, which a later update removes.
@@ -744,6 +754,10 @@ class Supervisor:
                 if action == "wait":
                     if state == "ready":
                         backoff = 5
+                        # The server is answering, so this starter is done: the flag goes now
+                        # rather than at the end of the process's life.
+                        if starting_flag is not None:
+                            starting_flag.release()
                     self.stop_event.wait(5 if state == "ready" else 2)
                     continue
                 if action == "stop-then-start":
@@ -758,22 +772,42 @@ class Supervisor:
                     if tail:
                         self.log("server log: " + str(tail)[:2000])
                     self._stop_runtime(30)
+                if starting_flag is not None:
+                    taken, detail = starting_flag.acquire(f"the Strata service (pid {os.getpid()})")
+                    if not taken:
+                        # Another starter is loading the model. A second load would put two
+                        # 15 GB models on one card, so this cycle leaves it alone and looks
+                        # again after the backoff.
+                        self.log(f"not starting: {detail}")
+                        self.stop_event.wait(backoff)
+                        backoff = min(backoff * 2, 120)
+                        continue
                 self.log(f"starting {conf['config']} (profile {PROFILE})")
                 self._runtime.start(PROFILE, wait=0, shutdown_timeout=conf["shutdown_timeout"])
-                self.stop_event.wait(min(backoff, 10))
-                # A model that fails at once would otherwise be started again every
-                # pass; grow the pause until a start reaches "ready" and resets it.
-                backoff = min(backoff * 2, 60)
+                # A model that fails at once - a tokenizer that is not there, a config whose
+                # files are on a drive that is not mounted - fails again the moment it is
+                # started, and the ten seconds between those starts is what turned one broken
+                # path into eighteen minutes of the same error on 2026-11-11. The pause grows
+                # until a start reaches "ready" (which resets it), so a real fix is picked up
+                # within two minutes and a broken one costs one line every two minutes.
+                self.stop_event.wait(backoff)
+                backoff = min(backoff * 2, 120)
             except ServiceError as exc:
                 self.log(f"cannot start: {exc}")
+                if starting_flag is not None:
+                    starting_flag.release()
                 self.stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)
             except Exception as exc:                      # noqa: BLE001 - a watchdog must not die
                 self.log(f"start failed: {exc.__class__.__name__}: {exc}")
+                if starting_flag is not None:
+                    starting_flag.release()
                 self._tail_runtime_logs()
                 self.stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)
         self.log("stop requested; stopping the server")
+        if starting_flag is not None:
+            starting_flag.release()
         if self._runtime is not None:
             try:
                 conf = load_conf(self.conf_path)
