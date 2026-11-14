@@ -251,7 +251,7 @@ class ModelStep(Base):
                 await press(pilot, "enter")
                 t = text_of(app)
                 self.assertIn("Fits?", t)
-                rec = next(l for l in t.splitlines() if "Qwen3.8-Flash-Next IQ3_S " in l)
+                rec = next(l for l in t.splitlines() if "Qwen3.8-Flash-Next IQ3_XXS " in l)
                 self.assertIn("fits (recommended)", rec)
                 for model in ("Q2_0", "NVFP4 ", "UD-Q5_K_XL"):
                     row = next(l for l in t.splitlines() if model in l and "GB" in l)
@@ -261,8 +261,10 @@ class ModelStep(Base):
 
     def test_choosing_a_model_and_going_on(self):
         async def case(app, pilot, ctx):
+            # three rows up from this fork's recommendation (qwen/IQ3_XXS, tier 48 GB and up) is DeepSeek's
+            # UD-Q8_K_XL; the test needs a model that is not the recommendation, and the row order is the catalog's
             await press(pilot, "enter", "up", "up", "up", "enter")
-            self.assertEqual((ctx.settings.family, ctx.settings.model), ("qwen", "Q2_0"))
+            self.assertEqual((ctx.settings.family, ctx.settings.model), ("deepseek41", "UD-Q8_K_XL"))
             self.assertIn("Where should the model files be stored?", text_of(app))
         self.run_app(case)
 
@@ -337,7 +339,7 @@ class FolderStep(Base):
             await press(pilot, "enter", "enter")
             t = text_of(app)
             self.assertIn("Where should the model files be stored?", t)
-            self.assertIn("Not downloaded yet: about 90 GB", t)
+            self.assertIn("Not downloaded yet: about 82 GB", t)
             self.assertIn("Free space in that folder's drive", t)
             f = app.screen.query_one("#folderpath")
             f.value = ""
@@ -594,7 +596,7 @@ class AdvancedStep(Base):
             self.assertIn("[experimental]", t)
             self.assertIn("+ Add a setting by name", t)
             self.assertIn("Command that will run", t)
-            self.assertIn("Same as: strata launch --model iq3_s", t)
+            self.assertIn("Same as: strata launch --model iq3_xxs", t)
         self.run_app(case, ctx=ctx)
 
     def test_edit_a_value_then_reset_it(self):
@@ -803,14 +805,14 @@ class SaveAndRun(Base):
             await press(pilot, *("enter",) * 7, "n", "enter")
             t = text_of(app)
             self.assertIn("Save as preset, then launch", t)
-            self.assertIn("Qwen3.8-Flash-Next IQ3_S", t)
+            self.assertIn("Qwen3.8-Flash-Next IQ3_XXS", t)
             self.assertIn("128K, memory int8", t)
             self.assertIn("quick (about 20 min)", t)
             self.assertIn("This computer only, port 8080", t)
             await press(pilot, "enter")                               # Save as a preset and launch
             await pilot.pause(0.8)
-            self.assertEqual([p.name for p in store.list_presets()], ["IQ3_S 128K"])
-            self.assertEqual(FakeRunner.instances[0].s.name, "IQ3_S 128K")
+            self.assertEqual([p.name for p in store.list_presets()], ["IQ3_XXS 128K"])
+            self.assertEqual(FakeRunner.instances[0].s.name, "IQ3_XXS 128K")
             self.assertIsNotNone(app.result)
         self.run_app(case)
 
