@@ -189,5 +189,40 @@ class Golden(unittest.TestCase):
         self.check(OutputParser, GOLDEN["xml"])
 
 
+class ServerPrefixedNames(unittest.TestCase):
+    """An MCP tool declared by its bare name also answers to `<server>__<name>`.
+
+    The app declares its MCP tools bare (`read_file`, `run_command`), and the model -- shown the tool list
+    with the server beside each tool -- writes `files__read_file`.  Before this rule that call counted as an
+    undeclared name and went back to the chat as text, so the turn ended with nothing done: four times in
+    one evening, each time looking like the model had simply stopped.
+    """
+
+    TOOLS = [{"name": "read_file"}, {"name": "run_command"}]
+
+    RAW = ("<tool_call>\n<function=files__read_file>\n<parameter=path>\nD:\\x.txt\n</parameter>\n"
+           "</function>\n</tool_call>")
+
+    def calls(self, raw, tools=None):
+        p = OutputParser(thinking=False, tools=self.TOOLS if tools is None else tools, stream_tools=True)
+        return [e.call for e in p.feed(raw) + p.finish() if e.kind == "tool_call"], p
+
+    def test_a_declared_tool_answers_to_its_server_prefix(self):
+        calls, parser = self.calls(self.RAW)
+        self.assertEqual([c.name for c in calls], ["read_file"])
+        self.assertEqual(calls[0].arguments.get("path"), "D:\\x.txt")
+        self.assertEqual(parser.unread, 0)
+
+    def test_a_prefix_whose_tail_is_not_declared_is_still_no_call(self):
+        calls, parser = self.calls(self.RAW.replace("files__read_file", "files__delete_path"))
+        self.assertEqual(calls, [])
+        self.assertEqual(parser.unread, 1)
+
+    def test_an_exactly_declared_name_wins_over_the_prefix_rule(self):
+        calls, _ = self.calls(self.RAW.replace("files__read_file", "files__run_command"),
+                              [{"name": "run_command"}, {"name": "files__run_command"}])
+        self.assertEqual([c.name for c in calls], ["files__run_command"])
+
+
 if __name__ == "__main__":
     unittest.main()

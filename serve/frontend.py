@@ -1170,6 +1170,44 @@ def parse_tool_call(body: str, schema: dict | None = None, notes: list | None = 
 RCALL_MAX = 32768        # the most of a `<tool_call>` inside the reasoning that is held while waiting for its end (#804)
 
 
+class _ToolAliases(dict):
+    """The alias map, plus the MCP server prefix: a bare declared tool also answers to `<server>__<name>`.
+
+    The aliases built in OutputParser spell a name *from* a declared one (a dotted `namespace.member` as
+    `namespace__member`, a declared `mcp__x__y` by its last segment, ...).  A tool the request declared by
+    its bare name -- which is what the app's MCP layer declares, `read_file`, `write_file`, `run_command` --
+    had no alias for the spelling the model sees in the tool list it was given, `<server>__read_file`: that
+    call counted as an undeclared name, was refused, and the turn ended with the call as text.  The last
+    `__` segment is the declared name when exactly one declared tool has it; an exactly declared name always
+    wins (`get` finds it first), so a tool that is itself `x__y` is never resolved away, and a prefix whose
+    tail is not declared (`files__delete_path` with only `read_file`) is still no call at all.
+
+    `get` and `in` are the only two questions the parser asks of this map, so overriding those two covers
+    every resolution site.
+    """
+
+    def __init__(self, aliases: dict, schemas: dict) -> None:
+        super().__init__(aliases)
+        self._schemas = schemas
+
+    def _server_prefixed(self, name) -> str | None:
+        if isinstance(name, str) and "__" in name and name not in self._schemas:
+            tail = name.rsplit("__", 1)[1]
+            if tail in self._schemas:
+                return tail
+        return None
+
+    def get(self, name, default=None):
+        found = dict.get(self, name, None)
+        if found is not None:
+            return found
+        tail = self._server_prefixed(name)
+        return tail if tail is not None else default
+
+    def __contains__(self, name) -> bool:
+        return dict.__contains__(self, name) or self._server_prefixed(name) is not None
+
+
 class OutputParser:
     """Incremental parser of the model's text. Feed deltas; get events. A tag split across deltas is held back
     until it is complete, so clients never see `<tool_` or `</thi`."""
@@ -1219,8 +1257,8 @@ class OutputParser:
             if isinstance(name, str) and name:
                 for prefix in ("tools.", "functions.", "default_api."):
                     aliases.setdefault(prefix + name, set()).add(name)
-        self.aliases = {alias: next(iter(names)) for alias, names in aliases.items()
-                        if len(names) == 1 and alias not in self.schemas}
+        self.aliases = _ToolAliases({alias: next(iter(names)) for alias, names in aliases.items()
+                                     if len(names) == 1 and alias not in self.schemas}, self.schemas)
         self.unread = 0              # #3441: `<tool_call>` blocks that opened like a call and were returned as text
         self.unread_names: list[str] = []   # the names (first few) of those that named a tool the request did not declare
         # stream_tools: a tool call is also reported while it is being written - "tool_start" (its name and id) as
