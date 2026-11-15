@@ -814,6 +814,23 @@ function msgEl(m, i) {
   const el = document.createElement("div");
   el.className = `st-msg st-msg--${m.role}`;
   el.dataset.i = i;
+  if (m.role === "user" && m.compacted) {              // the note compact.js put in place of the older turns
+    el.classList.add("st-msg--compacted");
+    const d = document.createElement("details");
+    d.className = "st-collapse compacted";
+    const s = document.createElement("summary");
+    s.innerHTML = icon("layers", "st-icon st-icon--sm") +
+      `<span class="tool-call__name">${esc(tr("chat.compacted", "Earlier conversation, compacted"))}</span>` +
+      `<span class="muted small">${esc(tr("chat.compactedCount", "{n} messages · {tokens} tokens", {n: fmt(m.compacted.count), tokens: kfmt(m.compacted.tokens)}))}</span>` +
+      icon("chevron", "st-icon st-icon--sm st-chev");
+    d.appendChild(s);
+    const body = document.createElement("div");
+    body.className = "st-collapse__body compacted__body";
+    body.innerHTML = markdown(m.summary || m.text);
+    d.appendChild(body);
+    el.appendChild(d);
+    return el;                                          // no edit/rewind on a summary: it is not a turn
+  }
   if (m.role === "user") {
     if (m.files && m.files.length) {
       const wrap = document.createElement("div");
@@ -1112,6 +1129,8 @@ const parksWhileBusy = () => settings.whileBusy === "queue" || settings.whileBus
 function setBusy(on) {
   $("stop-btn").hidden = !on;
   $("send-btn").disabled = (on && !parksWhileBusy()) || !!panel;
+  const cb = $("compact-btn");                        // compact.js disables it too while it runs
+  if (cb) cb.disabled = on || (typeof StrataCompact === "object" && StrataCompact && StrataCompact.busy());
   $("input").disabled = !!panel;
   $("composer-hint").textContent = panel ? tr("composer.finishOpen", "Save or cancel what is open above to continue")
                                          : on ? busyHint() : tr("composer.newline", "Shift+Enter: new line");
@@ -1194,6 +1213,11 @@ function settlePending(cut, finished) {
 
 // the message box (or a parked message, `payload`) becomes a user turn and a reply is asked for
 async function send(payload) {
+  if (typeof StrataCompact === "object" && StrataCompact && StrataCompact.busy()) {
+    toast("info", tr("compact.working", "Compacting the conversation…"),
+          tr("compact.wait", "Wait for the summary to finish."));
+    return;
+  }
   const own = !payload;
   const p = payload || {text: $("input").value.trim(), images: attachments.filter((a) => a.kind !== "file"),
                         files: attachments.filter((a) => a.kind === "file")};
@@ -1212,6 +1236,11 @@ async function send(payload) {
 }
 // an answer for the messages as they are: the last one is a user turn
 async function generateReply() {
+  // Before the request: if the conversation is close to the window, replace the older turns with a summary
+  // (compact.js. Automatic here rather than on a timer so it always runs before the request it protects.)
+  if (typeof StrataCompact === "object" && StrataCompact && StrataCompact.maybeAutoCompact) {
+    await StrataCompact.maybeAutoCompact();
+  }
   const m = {role: "assistant", text: "", reasoning: "", time: Date.now()};
   messages.push(m);
   renderChat();
@@ -1231,7 +1260,9 @@ async function generateReply() {
   if (settings.seed) body.seed = +settings.seed;
   if (settings.max) body.max_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
-  if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
+  // ask for the server's MCP tools whenever the switch is on: the server checks its own registry and
+  // declares nothing when none are ready, so a stale tool count here must not decide it (#—)
+  if (settings.mcp !== false) body.strata_mcp = true;
 
   let firstAt = null, thinkStart = null, usage = null, frame = 0;
   const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };

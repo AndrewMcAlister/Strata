@@ -9059,6 +9059,9 @@ def make_handler(svc: Service):
                     return
                 svc.mcp.wait(10)                                  # servers still starting (only right after start)
                 extra = svc.mcp.template_tools(exclude=own)       # the request's own tools win a name clash
+                if not extra:                                     # asked for, none ready: say so, because the
+                    print("[strata] MCP tools were requested but none are ready; this request goes "  # model will
+                          "without them, and any call it makes is refused as text", flush=True)         # still call one
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
             if force and use_mcp:
