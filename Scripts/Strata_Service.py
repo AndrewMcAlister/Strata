@@ -237,6 +237,27 @@ def write_conf(path: Path, config: Path, models: list[dict]) -> None:
     path.write_text(render_conf(config, models), encoding="utf-8")
 
 
+def set_conf_config(path: Path, config: Path) -> None:
+    """Point an existing service.conf at another run config, changing nothing else.
+
+    The file is edited in place rather than re-rendered: a person may have uncommented
+    ``port=`` or added a setting of their own, and a model switch must not drop it.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        write_conf(path, config, discover_models(ROOT))
+        return
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("config="):
+            lines[index] = f"config={config}"
+            break
+    else:
+        lines.append(f"config={config}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def grant_user_write(path: Path) -> None:
     """Let the installing person edit service.conf without an elevated editor.
 
@@ -1022,6 +1043,32 @@ def command_restart(args) -> int:
     return command_start(args)
 
 
+def command_serve(args) -> int:
+    """Serve another run config from the same service: rewrite ``config=`` and restart.
+
+    This is the model switch. It keeps one owner of the port: a shortcut that stopped the
+    service and started a second process had to race the previous engine for memory and for
+    8080, and lost that race with ``WinError 10048`` when it did not wait long enough.
+    """
+    require_windows()
+    config = Path(args.config).expanduser()
+    if not config.is_absolute():
+        config = (ROOT / config)
+    config = config.resolve()
+    if not config.is_file():
+        raise ServiceError(f"no such run config: {config}", 2)
+    if run_config_summary(config) is None:
+        raise ServiceError(f"{config} is not a Strata run config (it needs 'exe' and 'args')", 2)
+    if not service_status(args.name)["installed"]:
+        raise ServiceError(f"Service '{args.name}' is not installed. "
+                           f"Install it with: Scripts\\Strata_Service.ps1 -Action Install", 5)
+    set_conf_config(CONF_PATH, config)
+    grant_user_write(CONF_PATH)
+    print(f"Serving {config}")
+    print(f"Wrote   {CONF_PATH}")
+    return command_restart(args)
+
+
 def command_status(args) -> int:
     require_windows()
     status = service_status(args.name)
@@ -1101,6 +1148,10 @@ def parser() -> argparse.ArgumentParser:
         item.add_argument("--name", default=SERVICE_NAME)
         if command == "logs":
             item.add_argument("--tail", type=int, default=60)
+    serve = sub.add_parser("serve", help="serve another run config and restart (Administrator)")
+    serve.add_argument("--config", metavar="PATH", required=True,
+                       help="the run config to serve, for example strata-iq3_xxs.json")
+    serve.add_argument("--name", default=SERVICE_NAME)
     run = sub.add_parser("run", help="the Service Control Manager entry point")
     run.add_argument("--name", default=SERVICE_NAME)
     return ap
@@ -1113,6 +1164,7 @@ def main(argv: list[str] | None = None) -> int:
             return command_run(args)
         handlers = {"install": command_install, "uninstall": command_uninstall,
                     "start": command_start, "stop": command_stop, "restart": command_restart,
+                    "serve": command_serve,
                     "status": command_status, "logs": command_logs}
         return handlers[args.command](args)
     except ServiceError as exc:

@@ -20,12 +20,14 @@
 #   Start      start the service. The model loads in the background.
 #   Stop       stop the service; the server is asked to drain first.
 #   Restart    Stop, then Start. Use this after editing service.conf.
+#   Serve      point service.conf at another model config and restart, so switching
+#              models keeps the service and the port (-Config PATH).
 #   Status     say what the service and the model are doing.
 #   Logs       show the end of the newest service log (-Tail N).
 #   Edit       open service.conf in Notepad to change the model.
 #
 # Options:
-#   -Config PATH   install only: the model config to serve.
+#   -Config PATH   Install and Serve: the model config to serve.
 #   -NoStart       install only: register but do not start.
 #   -Force         install only: replace a same-named service not made by this script.
 #   -Purge         uninstall only: also delete settings, logs and service state.
@@ -34,7 +36,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Uninstall', 'Start', 'Stop', 'Restart', 'Status', 'Logs', 'Edit')]
+    [ValidateSet('Install', 'Uninstall', 'Start', 'Stop', 'Restart', 'Serve', 'Status', 'Logs', 'Edit')]
     [string]$Action = 'Status',
     [string]$Config,
     [switch]$NoStart,
@@ -131,7 +133,7 @@ if ($Action -eq 'Edit') {
     exit 0
 }
 
-$needsAdmin = @('Install', 'Uninstall', 'Start', 'Stop', 'Restart') -contains $Action
+$needsAdmin = @('Install', 'Uninstall', 'Start', 'Stop', 'Restart', 'Serve') -contains $Action
 $python = Find-Python
 if (-not $python) {
     Write-Error "No Python was found. Set STRATA_PYTHON to the python.exe that runs Strata, or install the Strata Terminal."
@@ -145,6 +147,13 @@ if ($Action -eq 'Install') {
     if ($Config) { $pythonArgs += @('--config', $Config) }
     if ($NoStart) { $pythonArgs += '--no-start' }
     if ($Force) { $pythonArgs += '--force' }
+}
+if ($Action -eq 'Serve') {
+    if (-not $Config) {
+        Write-Error "-Action Serve needs -Config PATH (the model config to serve)."
+        exit 2
+    }
+    $pythonArgs += @('--config', $Config)
 }
 if ($Action -eq 'Uninstall' -and $Purge) { $pythonArgs += '--purge' }
 if ($Action -eq 'Logs') { $pythonArgs += @('--tail', [string]$Tail) }
@@ -160,6 +169,7 @@ if ($needsAdmin -and -not (Test-Admin)) {
         if ($NoStart) { $parts += '-NoStart' }
         if ($Force) { $parts += '-Force' }
     }
+    if ($Action -eq 'Serve' -and $Config) { $parts += @('-Config', (Quote-Text $Config)) }
     if ($Action -eq 'Uninstall' -and $Purge) { $parts += '-Purge' }
     $inner = "& {0} {1} *>&1 | Tee-Object -FilePath {2}; exit `$LASTEXITCODE" -f `
         (Quote-Text $serviceScript), ($parts -join ' '), (Quote-Text $temp)
