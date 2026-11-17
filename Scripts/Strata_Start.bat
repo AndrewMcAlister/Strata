@@ -2,13 +2,15 @@
 rem ==============================================================================================
 rem  Strata_Start.bat - start Strata (the server and the model) from any shortcut.
 rem
-rem    Strata_Start.bat             start a model in the Strata folder - it asks which one when
-rem                                 more than one is installed, and starts the newest otherwise
-rem    Strata_Start.bat /newest     do not ask: start the newest model config
-rem    Strata_Start.bat /window     start it in its own window and return at once
+rem    Strata_Start.bat             start Strata: switch the service to the chosen model when the
+rem                                 service is installed, otherwise start a process
+rem    Strata_Start.bat /newest     do not ask: use the newest model config
+rem    Strata_Start.bat /process    start a process of your own instead of switching the service
+rem    Strata_Start.bat /window     start it in its own window and return at once (a process)
 rem    Strata_Start.bat /noopen     do not open the browser
 rem    Strata_Start.bat /restart    stop what is running first, then start it
 rem    Strata_Start.bat /status     say what is running right now, and change nothing
+rem    Strata_Start.bat /keepservice  start a process beside the service (it owns port 8080)
 rem    Strata_Start.bat /?          this text
 rem    Strata_Start.bat --gpu 1     anything else is passed to serve\server.py
 rem
@@ -38,6 +40,29 @@ rem               (not found above this file, no PowerShell, the process probe d
 rem               or no model is installed), 4 could not stop the old server for /restart, or
 rem               the exit code of the server itself when it ends.
 rem ==============================================================================================
+rem
+rem  MODEL CHOICES - the run configs in D:\Strata, newest first, which is the order the prompt lists.
+rem  The menu keys are LETTERS: a is the first line, b the second, and so on.
+rem
+rem    key  model                                                context    drafter  vision  quant     config
+rem    a    qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision      94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (coding, the default)
+rem    b    qwen3.8-flash-next-iq2_xs (20k)                      20,480     mtp      no      IQ2_XS    strata-iq2_xs-20k.json                     (smallest, fastest)
+rem    c    qwen3.8-flash-next-iq3_xxs-dflash2 (94k)             94,208     dflash2  no      IQ3_XXS   strata-iq3_xxs-dflash2.json                (chat)
+rem    d    qwen3.8-flash-next-q3_k_xl (70k)                     71,680     dflash2  yes     Q3_K_XL   strata-q3_k_xl.json
+rem    e    qwen3.8-flash-next-q4_k_xl_dflash2_143k             143,360     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_143k.json
+rem    f    qwen3.8-flash-next-q4_k_xl_dflash2_94k               94,208     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_94k.json
+rem
+rem  One drafter at a time: dflash2 (a block drafter, ~1.2 GB of VRAM, its configs reserve
+rem  1280 MiB) or the MTP layer. b still runs the MTP layer.
+rem
+rem  a is the default: /newest starts it and the Strata_EnsureRunning task restores it. The order is
+rem  each config write time, so leave the mtimes alone or the letters change.
+rem
+rem  Where the parts are: models D:\Strata-data\models, packs D:\Strata-data\packs,
+rem  draft layer D:\Strata-data\dflash2, logs and learned profile C:\Strata-scratch.
+rem
+rem  To skip the prompt, name the config: Strata_Start.bat --config D:\Strata\strata-iq3_xxs-dflash2.json
+rem
 
 setlocal EnableExtensions EnableDelayedExpansion
 title Strata
@@ -56,6 +81,8 @@ set "RESTART="
 set "STATUS="
 set "NEWEST="
 set "HELP="
+set "KEEPSERVICE="
+set "PROCESS="
 set "EXTRA="
 :parse
 if "%~1"=="" goto parsed
@@ -68,6 +95,9 @@ if /i "%~1"=="/restart" (set "RESTART=1" & shift & goto parse)
 if /i "%~1"=="/status"  (set "STATUS=1" & shift & goto parse)
 if /i "%~1"=="/newest"  (set "NEWEST=1" & shift & goto parse)
 if /i "%~1"=="/noopen"  (set "NOOPEN=1" & set "OPEN=" & shift & goto parse)
+if /i "%~1"=="/keepservice" (set "KEEPSERVICE=1" & shift & goto parse)
+if /i "%~1"=="/process"  (set "PROCESS=1" & shift & goto parse)
+if /i "%~1"=="/service"  (set "SERVICE=1" & shift & goto parse)
 set "EXTRA=!EXTRA! "%~1""
 shift
 goto parse
@@ -84,9 +114,43 @@ if not defined ROOT goto noroot
 rem --- /status is the stop script's job, so there is only one place that answers that ------------
 if defined STATUS goto status
 
+rem --- the service, or a process of this script's own? ------------------------------------------
+rem The service is the default when it is installed: it already owns port 8080, and the SCM stops
+rem the old server before the new one starts, so switching models cannot race a previous engine
+rem for memory and for the port - which is what a process started beside it has to do, and what
+rem "leftover engine stuck" then "WinError 10048" was.  /process asks for the old behaviour (a
+rem server in this window, console and all); /window and /fg are process ideas as well.
+set "SERVEMODE="
+if defined PROCESS goto modechosen
+if defined KEEPSERVICE goto modechosen
+if defined WINDOW goto modechosen
+if defined FOREGROUND goto modechosen
+sc query Strata >nul 2>nul
+if not errorlevel 1 set "SERVEMODE=1"
+:modechosen
+
 rem --- without an environment there is nothing to start: hand over to the first-run script ------
 set "PY=%ROOT%\.venv\Scripts\python.exe"
 if not exist "%PY%" goto setup
+
+rem --- the Windows service owns port 8080 too, so a start beside it cannot bind ---------------
+rem Process mode only (service mode skips this): the service runs its own server on the same port,
+rem so with it up this start reports "already running" or loses the bind, and the service's
+rem watchdog then retries against a port it will never get. Stop it first - it needs elevation, so
+rem this asks once per start.
+rem /keepservice skips this and leaves the service alone; the start then behaves as it did
+rem before this block existed.
+set "SVCRUN="
+if defined SERVEMODE goto svcdone
+for /f "tokens=3" %%A in ('sc query Strata 2^>nul ^| findstr /i "STATE"') do set "SVCRUN=%%A"
+if not "%SVCRUN%"=="4" goto svcdone
+if defined KEEPSERVICE goto svcdone
+echo.
+echo  The Strata service is running and holds port 8080, so it is stopped first.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%ROOT%\Scripts\Strata_ServiceStop.ps1'"
+rem let the SCM settle and release the port before the probe below looks for a running server
+ping -n 4 127.0.0.1 >nul 2>nul
+:svcdone
 
 rem --- what is running, and which model would be started? ---------------------------------------
 rem The probe is written to a temporary .ps1 file and run with -File: cmd cannot continue a caret
@@ -103,7 +167,7 @@ set "EXFILE=%TEMP%\strata-args-%RANDOM%.txt"
 rem an empty %EXTRA% would make this "echo" alone, which writes the words "ECHO is on."
 if defined EXTRA (>"%EXFILE%" echo %EXTRA%) else (type nul >"%EXFILE%")
 
->"%PSFILE%" echo param([string]$Root = '', [string]$Extras = '')
+>"%PSFILE%" echo param([string]$Root = '', [string]$Extras = '', [string]$All = '')
 >>"%PSFILE%" echo $ErrorActionPreference = 'SilentlyContinue'
 >>"%PSFILE%" echo $ct = [System.StringComparison]::OrdinalIgnoreCase
 >>"%PSFILE%" echo $venvdir = $Root + '\.venv\Scripts'
@@ -192,6 +256,10 @@ rem and the pinned memory, and a new engine started beside it cannot load.
 >>"%PSFILE%" echo }
 >>"%PSFILE%" echo $cfg = JsonOf $extra
 >>"%PSFILE%" echo if ($cfg -eq '') { $cfg = JsonOf $cmdline }
+rem Service mode lists every config even though a server is running: the model that server serves is
+rem about to be replaced, so its config is not a choice to keep - All says so, and an empty cfg then
+rem takes the newest-config path below, which is where the menu comes from.
+>>"%PSFILE%" echo if ($All -eq '1') { $cfg = '' }
 rem AUTO says the config is the fallback below and not one asked for, so it is the only case where
 rem asking which model to start is a real question.  The list is kept (newest first, the same order
 rem and the same IsConfig test as before) so the start can offer it; the newest stays the default.
@@ -269,6 +337,17 @@ rem started on the wrong port.
 >>"%PSFILE%" echo             if ($jj.port) { $jp = [int]$jj.port }
 >>"%PSFILE%" echo         }
 >>"%PSFILE%" echo         if ($m -eq '') { $m = 'strata' }
+rem --- display labels: three of these model_name values do not say how much context they run.
+rem --- The menu shows exactly what you pick, so the map adds the bracketed size for those three.
+rem --- It is a label only: the config and its model_name are untouched.
+>>"%PSFILE%" echo         $labels = @{
+>>"%PSFILE%" echo             'strata-iq2_xs-20k.json'      = 'qwen3.8-flash-next-iq2_xs (20k)'
+>>"%PSFILE%" echo             'strata-iq3_xxs-dflash2.json' = 'qwen3.8-flash-next-iq3_xxs-dflash2 (94k)'
+>>"%PSFILE%" echo             'strata-q3_k_xl.json'         = 'qwen3.8-flash-next-q3_k_xl (70k)'
+>>"%PSFILE%" echo             'strata-iq2_xs-dflash2.json'  = 'qwen3.8-flash-next-iq2_xs (20k, dflash2)'
+>>"%PSFILE%" echo         }
+>>"%PSFILE%" echo         $leaf = Split-Path -Leaf $p
+>>"%PSFILE%" echo         if ($labels.ContainsKey($leaf)) { $m = $labels[$leaf] }
 >>"%PSFILE%" echo         Write-Output ('CFG' + $k + '=' + $p)
 >>"%PSFILE%" echo         Write-Output ('MODEL' + $k + '=' + $m)
 >>"%PSFILE%" echo         Write-Output ('EXE' + $k + '=' + $x)
@@ -290,7 +369,9 @@ set "TTY="
 set "WANTPORT="
 set "SEL="
 set "PSOUT=%TEMP%\strata-start-%RANDOM%.out"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -Extras "%EXFILE%" >"%PSOUT%" 2>nul
+set "ALLARG="
+if defined SERVEMODE set "ALLARG=-All 1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -Extras "%EXFILE%" %ALLARG% >"%PSOUT%" 2>nul
 set "PROBECODE=%ERRORLEVEL%"
 if "%PROBECODE%"=="0" for /f "usebackq delims=" %%A in ("%PSOUT%") do set "%%A"
 del "%PSFILE%" >nul 2>nul
@@ -307,6 +388,10 @@ if not defined AUTO set "AUTO=0"
 if not defined NCFG set "NCFG=0"
 if not defined TTY set "TTY=0"
 if not defined WANTPORT set "WANTPORT=0"
+
+rem In service mode the port is held by the service on purpose: it is the thing about to be
+rem restarted with another model, so the "already running" and orphan checks below do not apply.
+if defined SERVEMODE goto launch
 
 rem --- starting twice would only fail later on a busy port, so deal with it here -----------------
 rem An engine that outlived its server is the one case the server check cannot see, and it is the
@@ -415,6 +500,7 @@ set "EXE=!EXE%SEL%!"
 if "%WANTPORT%"=="0" set "PORT=!PORT%SEL%!"
 
 :banner
+if defined SERVEMODE goto serve
 rem The command line for the model that is about to be started, built from the config chosen
 rem above - the newest when nothing was asked.  It is refused when the command line carried its
 rem own --engine: that flag decides which engine runs, and the mock takes no config.
@@ -436,6 +522,31 @@ if not "%CODE%"=="0" echo.
 if not "%CODE%"=="0" echo  Strata ended with code %CODE%.
 if not "%CODE%"=="0" echo  The last lines above say why; ending with 1 usually means the model
 if not "%CODE%"=="0" echo  could not be loaded, so check the config and its log file.
+if defined FOREGROUND goto eof
+pause
+goto eof
+
+rem --- service mode: switch the model the service serves, and leave it running ---------------------
+rem One owner of the port: the SCM stops the old server before the new one starts, so there is no
+rem engine to race and no WinError 10048.  The choice is written to service.conf, so it is also the
+rem model the service brings back after a reboot.
+:serve
+if "%CFG%"=="" goto noconfig
+echo.
+echo  Strata - %MODEL%
+echo    folder   %ROOT%
+echo    config   %CFG%
+echo    address  http://127.0.0.1:%PORT%/
+echo.
+echo  Switching the Strata service to this model.  It stops the old server, writes the choice to
+echo  service.conf and starts it again; this window waits and then opens the page.
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Service.ps1" -Action Serve -Config "%CFG%"
+set "CODE=%ERRORLEVEL%"
+if not "%CODE%"=="0" echo.
+if not "%CODE%"=="0" echo  The switch ended with code %CODE%.  Scripts\Strata_Service.ps1 -Action
+if not "%CODE%"=="0" echo  Logs, and the service log in ProgramData, say what stopped it.
+if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%PORT%/?open=%RANDOM%#monitor"
 if defined FOREGROUND goto eof
 pause
 goto eof
@@ -514,11 +625,14 @@ rem --- what to say when something that must be there is not -------------------
 echo.
 echo  Strata_Start.bat - start Strata (the server and the model) from any shortcut
 echo.
-echo    Strata_Start.bat             start a model - asks which one when more than one is installed
-echo    Strata_Start.bat /newest     do not ask: start the newest model config
-echo    Strata_Start.bat /window     start it in its own window and return at once
+echo    Strata_Start.bat             start Strata - switches the service's model when the service is
+echo                                 installed, and starts a process otherwise
+echo    Strata_Start.bat /newest     do not ask: use the newest model config
+echo    Strata_Start.bat /process    start a process of your own instead of switching the service
+echo    Strata_Start.bat /window     start it in its own window and return at once (a process)
 echo    Strata_Start.bat /noopen     do not open the browser
 echo    Strata_Start.bat /restart    stop what is running first, then start it
+echo    Strata_Start.bat /keepservice  start a process beside the service (it owns port 8080)
 echo    Strata_Start.bat /status     say what is running right now, and change nothing
 echo    Strata_Start.bat /?          this text
 echo    Strata_Start.bat --gpu 1     anything else is passed to serve\server.py
