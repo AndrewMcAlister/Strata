@@ -52,6 +52,8 @@ build-vision-cuda12.bat
 /engine-cuda12/
 /engine-dsv41/
 /engine-dsv41.work/
+# local engine backups (strata.exe is over GitHub's 100 MB file limit; kept on disk only)
+/engine-backup-*/
 /build-release*/
 /dist/
 *.done
