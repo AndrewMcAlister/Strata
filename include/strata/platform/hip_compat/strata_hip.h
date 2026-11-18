@@ -94,6 +94,10 @@ inline hipError_t strata_device_get_attribute(int* v, hipDeviceAttribute_t a, in
     return e;
 }
 #define cudaDeviceGetAttribute strata_device_get_attribute
+// Stream priority (the DFlash2 drafter's high-priority stream, src/core/dflash2.cpp): CUDA's name, HIP's function.
+// The gfx906 route takes dflash2.cpp's CUDA branch (it defines STRATA_HIP_GFX906, not STRATA_USE_HIP), so the shim
+// has to carry this pair as well; the wave32 route calls the hip* names directly.
+#define cudaDeviceGetStreamPriorityRange hipDeviceGetStreamPriorityRange
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
@@ -130,6 +134,7 @@ template <typename T> inline hipError_t strata_host_alloc(T** p, size_t bytes, u
 #define cudaHostGetDevicePointer hipHostGetDevicePointer
 #define cudaStreamCreate hipStreamCreate
 #define cudaStreamCreateWithFlags hipStreamCreateWithFlags
+#define cudaStreamCreateWithPriority hipStreamCreateWithPriority
 #define cudaStreamDestroy hipStreamDestroy
 #define cudaStreamSynchronize hipStreamSynchronize
 #define cudaStreamQuery hipStreamQuery
