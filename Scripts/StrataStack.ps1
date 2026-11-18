@@ -82,7 +82,11 @@ switch ($Action) {
         # so it offers the menu again. That is the whole point: one click to change model.
         if (StrataAnswering) {
             Say 'stopping the running model first...' 'Cyan'
-            & cmd.exe /c "$BATCH_STOP /quiet" | Out-Null
+            # No /quiet: the stop waits up to 60 s for the model to drain and prints its progress
+            # ("still shutting down: 1 process(es), 40.0 GB held, 12s of 60s"). Piping it to
+            # Out-Null hid that and made the wait look like a hang (18 Nov 2026: the stand-in on
+            # 8080 cannot be asked to stop, so it always ran the full minute).
+            & cmd.exe /c "$BATCH_STOP"
             Start-Sleep -Seconds 2
         }
 

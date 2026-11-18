@@ -351,6 +351,10 @@ rem --- It is a label only: the config and its model_name are untouched.
 >>"%PSFILE%" echo         Write-Output ('CFG' + $k + '=' + $p)
 >>"%PSFILE%" echo         Write-Output ('MODEL' + $k + '=' + $m)
 >>"%PSFILE%" echo         Write-Output ('EXE' + $k + '=' + $x)
+>>"%PSFILE%" echo         $xs = $x
+>>"%PSFILE%" echo         if ($xs -like 'component:*') { $xs = 'engine package for this PC' }
+>>"%PSFILE%" echo         elseif ($xs -ne '') { $xs = Split-Path (Split-Path $xs -Parent) -Leaf }
+>>"%PSFILE%" echo         Write-Output ('ENG' + $k + '=' + $xs)
 >>"%PSFILE%" echo         Write-Output ('PORT' + $k + '=' + $jp)
 >>"%PSFILE%" echo     }
 >>"%PSFILE%" echo } else { Write-Output 'NCFG=0' }

@@ -794,6 +794,15 @@ class Supervisor:
                         self.log("server log: " + str(tail)[:2000])
                     self._stop_runtime(30)
                 if starting_flag is not None:
+                    # Nothing healthy is loading (this branch is here to start), so a flag still on
+                    # disk is this process's own from a start that failed, or debris.  Clear ours
+                    # (or a stale one), or the service refuses its own next attempt for ever
+                    # ("not starting: the Strata service (pid <itself>)", seen 18 Nov 2026 after a
+                    # start that failed on a busy port).  A fresh flag from ANOTHER process is left
+                    # alone: that is the double-load guard.
+                    held = starting_flag.read() or {}
+                    if held.get("pid") == os.getpid() or not starting_flag.is_fresh():
+                        starting_flag.release()
                     taken, detail = starting_flag.acquire(f"the Strata service (pid {os.getpid()})")
                     if not taken:
                         # Another starter is loading the model. A second load would put two
@@ -1043,6 +1052,155 @@ def command_restart(args) -> int:
     return command_start(args)
 
 
+def _port_busy(port: int) -> bool:
+    """Whether something already listens on 127.0.0.1:port.
+
+    The service opens the port only after the model is in VRAM, so a switch into a busy port does not
+    fail at the switch: the service starts, its server cannot bind, and nothing answers.  Telling the
+    person before the restart is the only useful moment (18 Nov 2026: the stand-in held 8080).
+    """
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        probe.bind(("127.0.0.1", int(port)))
+        return False
+    except OSError:
+        return True
+    finally:
+        probe.close()
+
+
+def _model_name_of(config: Path) -> str:
+    """The run config's ``model_name``: what /health must call itself for a switch to count as served."""
+    try:
+        data = json.loads(Path(config).read_text(encoding="utf-8-sig"))
+        return str(data.get("model_name") or "").strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def _engine_last_line(config: Path) -> str:
+    """The engine's own last log line for this run config: the plainest "why" there is."""
+    try:
+        log = str(json.loads(Path(config).read_text(encoding="utf-8-sig")).get("log") or "")
+    except (OSError, ValueError):
+        return ""
+    if not log or not Path(log).is_file():
+        return ""
+    for line in reversed(_tail(Path(log), lines=12)):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def engine_of(config: Path) -> str:
+    """The engine program a run config names and the card family: a path or "the engine package for
+    this PC", then its ``backend``.  This is what "which engine" means - the config carries it."""
+    try:
+        data = json.loads(Path(config).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return ""
+    exe = str(data.get("exe") or "")
+    if exe.startswith("component:"):
+        exe = "the engine package for this PC (`strata update`)"
+    backend = str(data.get("backend") or "")
+    return f"{exe}  [{backend}]" if backend else exe
+
+
+def _log_stamp(line: str) -> float | None:
+    """The time in a service log line ("2026-11-18 22:04:38 [Strata] ..."), as epoch seconds."""
+    try:
+        return time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _service_log_tail(count: int = 60) -> list[str]:
+    files = sorted(LOG_DIR.glob("service-*.log"), key=lambda p: p.stat().st_mtime) if LOG_DIR.is_dir() else []
+    return _tail(files[-1], lines=count) if files else []
+
+
+def _recent_failure(minutes: float = 10.0) -> str:
+    """The service log's last "what stopped it" line from the last few minutes, or "".
+
+    "Running" is the supervisor's state, not the model's: a service whose engine exits at once stays
+    Running and retries, so status has to read the log to say why the endpoint is not answering.
+    """
+    for line in reversed(_service_log_tail(120)):
+        when = _log_stamp(line)
+        if when is None or when < time.time() - minutes * 60:
+            continue
+        for marker in ("start failed:", "server state is failed", "cannot be loaded"):
+            if marker in line:
+                return line.split("[Strata]", 1)[-1].strip()
+    return ""
+
+
+def switch_verdict(config: Path, name: str, seconds: float = 40.0) -> int:
+    """Say what the switch actually produced: serving, still loading, or why the engine did not start.
+
+    The service is Running from the moment its supervisor starts, and 8080 is opened only after the
+    model is in VRAM, so neither of those says whether the engine came up.  The service log does:
+    the supervisor writes "starting <config>" and then either the endpoint answers, or one line says
+    what stopped it ("start failed: ...", "server state is failed ...").
+    """
+    engine = engine_of(config)
+    try:
+        conf = load_conf(CONF_PATH)
+        url = _health_url(conf)
+    except ServiceError:
+        conf, url = None, "http://127.0.0.1:8080/"
+    began = time.time()
+    deadline = began + max(5.0, seconds)
+    failure = ""
+    foreign = ""
+    wanted = _model_name_of(config)
+    while time.monotonic() < deadline:
+        health = wait_healthy(conf, 1) if conf is not None else None
+        if health is not None:
+            answered = str(health.get("model") or "").strip()
+            if not wanted or answered.lower() == wanted.lower():
+                print(f"Serving    {url}")
+                print(f"Engine     {engine}")
+                print(f"Model      {config}")
+                return 0
+            # Something answers, but it is not the model just chosen: the stand-in or another
+            # server holds the port.  "Serving" would be a lie, and this is exactly what a page
+            # served by the stand-in looked like on 18 Nov 2026.
+            foreign = (f"port {url.rsplit(':', 1)[-1].split('/')[0]} answers as '{answered or 'another server'}', "
+                       f"not '{wanted}': another server (the stand-in?) holds it, so the service could not bind")
+        for line in reversed(_service_log_tail()):
+            when = _log_stamp(line)
+            if when is None or when < began - 2:          # a line from before this switch says nothing
+                continue
+            for marker in ("start failed:", "server state is failed", "cannot be loaded"):
+                if marker in line:
+                    failure = line.split("[Strata]", 1)[-1].strip()
+                    break
+            if failure:
+                break
+        if failure:
+            break
+        time.sleep(2)
+    if failure or foreign:
+        print(f"NOT serving: {failure or foreign}")
+        reason = _engine_last_line(config) if failure else ""
+        if reason:
+            print(f"Reason     {reason}")
+        print(f"Engine     {engine}")
+        print(f"Model      {config}")
+        print(f"Log        {LOG_DIR}")
+        print("The service stays up and retries; -Action Status says what it is doing.")
+        return 3
+    print(f"Starting   the model is loading; it answers on {url} when it is ready.")
+    print(f"Engine     {engine}")
+    print(f"Model      {config}")
+    print("Check      powershell -File Scripts\\Strata_Service.ps1 -Action Status")
+    return 0
+
+
 def command_serve(args) -> int:
     """Serve another run config from the same service: rewrite ``config=`` and restart.
 
@@ -1062,11 +1220,24 @@ def command_serve(args) -> int:
     if not service_status(args.name)["installed"]:
         raise ServiceError(f"Service '{args.name}' is not installed. "
                            f"Install it with: Scripts\\Strata_Service.ps1 -Action Install", 5)
+    try:
+        port = int(json.loads(config.read_text(encoding="utf-8-sig")).get("port") or 8080)
+    except (OSError, ValueError):
+        port = 8080
+    if _port_busy(port):
+        print(f"Port {port} is already used by another server, so the service could not take it.")
+        print("Nothing was changed.  Stop that one first, then run this again:")
+        print(r"  powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Strata\mock-8080.ps1 -Action Stop")
+        print(r"  (that is this PC's stand-in engine; Strata_Stop.bat stops a Strata server, either kind)")
+        return 2
     set_conf_config(CONF_PATH, config)
     grant_user_write(CONF_PATH)
     print(f"Serving {config}")
     print(f"Wrote   {CONF_PATH}")
-    return command_restart(args)
+    code = command_restart(args)
+    if code != 0:
+        return code
+    return switch_verdict(config, args.name)
 
 
 def command_status(args) -> int:
@@ -1087,6 +1258,9 @@ def command_status(args) -> int:
         print(f"Logs       {LOG_DIR}")
         return 0
     print(f"Model      {conf['config']}")
+    engine = engine_of(conf["config"])
+    if engine:
+        print(f"Engine     {engine}")
     try:
         data = json.loads(Path(conf["config"]).read_text(encoding="utf-8-sig"))
         if data.get("log"):
@@ -1097,7 +1271,11 @@ def command_status(args) -> int:
     if status["state"] == "running":
         health = wait_healthy(conf, 2)
         if health is None:
-            print(f"Endpoint   {url}  (not answering yet; the model may still be loading)")
+            why = _recent_failure()
+            if why:
+                print(f"Endpoint   {url}  (NOT answering: {why})")
+            else:
+                print(f"Endpoint   {url}  (not answering yet; the model may still be loading)")
         else:
             print(f"Endpoint   {url}  (ok; model {health.get('model') or 'unknown'})")
     else:
