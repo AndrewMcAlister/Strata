@@ -495,3 +495,56 @@ server changes are the import, `self.blocks` in `__init__`, `expand()` and the `
 config line. Upstream requests carry no `{{cache:` and no `cache_pin`, so a merge can keep both sides; the
 one thing to re-check is that `expand()` still runs before `encode_prompt()` in `prepare()`.
 
+## 13. Which engine, which card: the run config decides (18 Nov 2026)
+
+A model config's own keys choose the engine program and the card. Nothing has to be installed,
+updated or uninstalled to switch: edit the lines, restart what serves, and the other engine runs.
+
+| Key | What it decides | Example |
+|---|---|---|
+| `"exe"` | the engine program: a path, or `"component:strata-engine"` (the engine package for this PC) | `"D:\\Strata\\build-906-win\\strata.exe"` |
+| `"backend"` | the card family: `cuda`, `hip`, `cpu`. Makes the server set `HIP_VISIBLE_DEVICES` instead of `CUDA_VISIBLE_DEVICES`, and lets it ask the engine's own `strata-device --list-devices` which AMD card to use | `"hip"` |
+| `"lib_dirs"` | folders put first on `PATH` (Windows) or `LD_LIBRARY_PATH`: where the engine's DLLs or `.so` files are | the ROCm `bin` |
+| `"gpu"` | the card(s) to use, numbered as `nvidia-smi` numbers them: `2`, or `[0, 2]` for a layer split | `0` |
+| `"hip_ordinal"` | the AMD card's ordinal, as `strata-device --list-devices` reported it; it wins for a one-card config when an integrated Radeon takes 0 | `0` |
+| `"env"` | variables for the engine process | `{"STRATA_WDDM_BUDGET": "0"}` |
+
+The configs in this folder name two engines:
+
+| Config | Engine | Card |
+|---|---|---|
+| `strata-iq2_xs-20k.json` | `component:strata-engine`, `"backend": "cuda"` | an NVIDIA card, through the engine package installed for this PC |
+| `strata-iq2_xs-20k-mi50.json` | `D:\Strata\build-906-win\strata.exe`, `"backend": "hip"`, `lib_dirs` at the ROCm `bin` | the Radeon (gfx906) hand build |
+
+To change what the Windows service serves, edit the `config=` line of
+`C:\ProgramData\Strata\service\service.conf` and restart the service. To change the engine inside one
+config, edit `exe` and `backend` together: a HIP binary with `"backend": "cuda"` still starts, but the
+server then sets the CUDA variables and never chooses an AMD card.
+
+Two limits, measured on this PC on 18 Nov 2026:
+
+- `"component:strata-engine"` with `"backend": "hip"` needs a HIP engine package in
+  `%LOCALAPPDATA%\Strata\components\engine`. With none installed the start stops with "the component
+  folder holds no engine package", which is the state here (the folder is empty).
+- The MI50 config points at a hand build, and that build starts only when the card has a driver with
+  compute. Today the installed driver carries none (`amdocl64.dll` is absent) and the engine reports
+  "no ROCm-capable device is detected"; see `TODO/vega20-gfx906-engine-plan.md`.
+
+The keys are upstream's, not this fork's: `serve/server.py` reads them in `child_env()`
+(`:4440-4479`), `gpu_list()` (`:3670`) and `hip_visible()` (`:4157`), and resolves the engine reference
+at `:10537`. `docs/SECOND_GPU.md` documents `"gpu"` and `gpu_roles`; `docs/SETTINGS.md` has the
+per-engine variables that `"env"` can carry.
+
+**Choosing one from the Desktop.** `Strata.lnk` runs `StrataStack.ps1 -Action Start` with no `-Model`, and
+`Strata_Start.bat` then lists every `strata-*.json` in `D:\Strata`, newest first, one letter per entry, by
+its `model_name`; the start line that follows prints the engine path it picked. A new config is a new menu
+entry, nothing else to register. `Strata (q4 coding).lnk` and `Strata (chat).lnk` pass `-Model <config>`
+straight through; `Strata (q4 MI50).lnk` does the same with
+`strata-q4_k_xl_dflash2_94k_mi50.json`.
+
+**Before a start**, `python tools/native_check.py --config <config>` answers whether the engine can load
+the model at all (exit 0 = GO). It caught two things here on 18 Nov 2026, both in the Unsloth UD-Q4_K_XL
+files: `--native` must be shard 2 (`token_embd.weight` lives there; shard 1 is metadata only), and
+`--ple-gguf` is required, pointing at shard 4 (the 28.8 GB IQ4_NL PLE table). The four configs in
+`D:\Strata` now all report `GO`.
+
