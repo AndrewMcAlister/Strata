@@ -1,7 +1,7 @@
 <#
     Which model an unattended start should choose.
 
-    THE TUNED 70K CONFIG IS THE DEFAULT. It is the configuration this machine was
+    THE TUNED 94K CONFIG IS THE DEFAULT. It is the configuration this machine was
     tuned for: the 40 GiB pinned expert budget, the adaptive RAM tier that follows
     the conversation, and the expert profile learned from real work. An unattended
     start - the task at logon - is the one case where nobody has chosen anything,
@@ -19,7 +19,9 @@
 param([string]$Root = 'D:\Strata')
 
 # The default model, by model_name. One line to change.
-$DEFAULT_MODEL = 'qwen3.8-flash-next-unsloth-ud-q4_k_xl-dflash2-tuned-70k'
+# It names the config the Windows service serves (strata-q4_k_xl_dflash2_94k_novision.json), so an unattended start and
+# the service pick the same model instead of loading two different ones into the same 62 GB of RAM.
+$DEFAULT_MODEL = 'qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision'
 
 $ErrorActionPreference = 'SilentlyContinue'
 

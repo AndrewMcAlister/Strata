@@ -46,6 +46,12 @@ main { flex: 1; min-height: 0; display: flex; }
 .msg-images img { max-width: 220px; max-height: 180px; border-radius: var(--st-r-md); border: 1px solid var(--st-line); }
 .st-msg .st-collapse { width: 100%; }
 .st-collapse__body.thinking { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow-y: auto; }
+/* the compacted-conversation note (compact.js): a user turn that stands for the turns it replaced */
+.st-msg--compacted { max-width: 100%; }
+.st-msg--compacted .st-collapse { border-style: dashed; }
+.st-msg--compacted summary { gap: var(--st-s-2); }
+.compacted__body { max-height: 360px; overflow-y: auto; overflow-wrap: anywhere; }
+.compacted__body h3, .compacted__body h4 { margin-top: var(--st-s-3); }
 .st-msg { min-width: 0; }
 .st-msg__meta .st-btn--icon { width: 28px; height: 28px; }
 .st-msg__meta .st-btn--icon .st-icon { width: 16px; height: 16px; }

@@ -123,11 +123,17 @@ the two strict refusal tests now set it `False` explicitly, as
 **Re-implementation:** most conflict-prone change. Apply last, after reading upstream's
 current refusal code.
 
-## 4. MCP tools (in use)
+## 4. MCP tools (every model config carries them)
 
-- `tools/filesystem_mcp.py`, `tools/web_search_mcp.py`
+- `tools/filesystem_mcp.py` (files, policy-gated), `tools/web_search_mcp.py` (web)
+- `tools/sync_model_tools.py` writes the same `mcp` + `mcp_servers` block into
+  every `strata-*.json` the start menu offers; `--check` reports a config that
+  has drifted. It preserves each file's mtime so the menu order does not move.
 
-Both are referenced from the live `strata-iq3_xxs.json`:
+The tools are a property of the install, not of which weights are loaded: a
+config without them is a model that truthfully tells the user it has no
+filesystem access. That is how the q4 configs, built from scratch, ended up
+without the block the iq2/iq3 configs had. Run the sync after adding a config.
 
 ```json
 "mcp_servers": {
@@ -136,7 +142,36 @@ Both are referenced from the live `strata-iq3_xxs.json`:
 }
 ```
 
-If they are ever removed, update that config in the same change.
+The policy lives at `D:\strata-data.json` - outside this repository, not tracked,
+and read once when the files server starts. Git working trees (including their
+`.git` folder) and any folder whose name contains "temp" are writable, and
+`prohibited` always wins. If the file is missing or unparseable the server still
+starts but refuses every change, so "I have no filesystem access" is worth
+checking there first. To see the decision for one path:
+
+```
+python tools/filesystem_mcp.py --policy D:\strata-data.json --explain D:\PaperTrader\ledger
+```
+
+### Chat compaction (fork feature)
+
+The web chat sends the whole conversation every turn, so a long chat eventually leaves
+no room for an answer. `serve/web/compact.js` (new) summarizes the older turns into one
+note and keeps the most recent ~32% verbatim. It runs from the Compact button in the
+composer bar, and automatically at 70% of `health.max_context` - at the top of
+`generateReply`, before the request it protects.
+
+- Each summary request carries one chunk, sized to half the window (capped at 40k
+  tokens), so it works even when the chat is already near the limit.
+- A summary is requested with `stream: false` and
+  `chat_template_kwargs: {enable_thinking: false}`: extraction, not reasoning, and
+  several times faster.
+- Nothing is replaced until every chunk has a summary; the toast offers Undo, and the
+  Stop button cancels a run.
+- The note is a user message with `compacted: {count, tokens}` and `summary`; `msgEl`
+  draws it as its own dashed block and `chatTitle` skips it.
+- Tests: `serve/test_web_compact.py` (the pure planner under node, plus the wiring in
+  the served files).
 
 ## 5. Deliberately removed (27 Oct 2026)
 

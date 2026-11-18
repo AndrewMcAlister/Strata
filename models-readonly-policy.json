@@ -1,0 +1,28 @@
+{
+  "_readme": [
+    "Read-only access to Strata's model folder, for the model chat's 'models' tool.",
+    "",
+    "This file exists so that the tool that reads the model library is READ-ONLY in",
+    "code, not by the model's good behaviour. Every change is prohibited outright:",
+    "the model files are tens of gigabytes of downloadable material, and nothing in",
+    "a chat has any business rewriting, moving or deleting them. Reading is never",
+    "gated by serve/../tools/filesystem_mcp.py, which is the whole point of a",
+    "separate server for this folder.",
+    "",
+    "`**` names everything under the root the server was started with, at any",
+    "depth, so this list does not have to change when the model folder moves to",
+    "another drive or another name: tools/sync_model_tools.py starts the server on",
+    "whatever folder Strata's data_dir setting names at the time.",
+    "",
+    "enforce must be true. If this file cannot be read, the server refuses every",
+    "change anyway (it fails closed), and says so."
+  ],
+  "default": "read-only",
+  "enforce": true,
+  "prohibited": [
+    {
+      "path": "**",
+      "note": "The model library is read-only to the chat. Downloading, packing and moving it is setup's work, not a tool call."
+    }
+  ]
+}

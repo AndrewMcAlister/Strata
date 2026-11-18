@@ -61,12 +61,15 @@ neither of the two rules below is refused for a change.
 
   * writable - a path is writable when some folder in its chain of parents, up to
     the root, holds a `.git` entry, or when it sits under an entry in
-    `writable.also`. Permission is tied to what makes a mistake recoverable
-    rather than to a hand-written list of names: if git can undo it, it may be
-    changed. The list therefore maintains itself.
+    `writable.also`, or - with `"temp_folders": true` under `writable` - when
+    one of those parents is a folder whose name contains "temp" (D:\\temp,
+    a %TEMP% directory, ...). Permission is tied to what makes a mistake
+    recoverable rather than to a hand-written list of names: if git can undo
+    it, it may be changed. The list therefore maintains itself.
   * prohibited - always wins, including against a writable parent. This is where
     the gitignored and irreplaceable lives: the live trading record, the live
-    configuration, .git itself, and the privilege boundary this server sits on.
+    configuration, and the privilege boundary this server sits on. A policy can
+    name `.git` here too when history must outrank the git rule.
 
 Entries are normalized before matching, so either slash works and case is
 ignored. `**` matches any depth, `*` matches within one path component. An entry
@@ -482,6 +485,11 @@ class Policy:
         # them, because that order is what decides which entry a refusal names.
         self.writable_also: list[tuple[str, str, str]] = []
         self.prohibited: list[tuple[str, str, str]] = []
+        # Opt-in because a temp folder is not covered by git either: it is a
+        # place whose contents are expected to be disposable. Named "temp" by
+        # the policy rather than assumed, so a server given no policy still
+        # refuses changes it was not told about.
+        self.temp_folders = False
         self.load()
 
     def load(self) -> None:
@@ -512,6 +520,8 @@ class Policy:
         writable = data.get("writable") or {}
         also = writable.get("also") if isinstance(writable, dict) else None
         self.writable_also = self._entries(also, "writable.also")
+        self.temp_folders = (isinstance(writable, dict)
+                             and writable.get("temp_folders") is True)
         self.prohibited = self._entries(data.get("prohibited"), "prohibited")
         self.active = True
         self.why = (f"{len(self.prohibited)} prohibited entries, "
@@ -566,17 +576,41 @@ class Policy:
                 return None
             cur = parent
 
+    def _temp_folder(self, path: str) -> str | None:
+        """The nearest ancestor folder whose name holds "temp", if enabled.
+
+        Only the ancestors count, and the leaf counts only when it is already a
+        folder. A file merely called `temp.txt` must not make its folder
+        writable, or any filename would be a way past the policy; a folder
+        called `temp` is what `writable.temp_folders` is for, and once it exists
+        everything below it is writable the same way `writable.also` works.
+        """
+        if not self.temp_folders:
+            return None
+        norm = _norm_path(path)
+        cur = norm if os.path.isdir(norm) else os.path.dirname(norm)
+        while cur and cur != os.path.dirname(cur):
+            if "temp" in os.path.basename(cur).lower():
+                return cur
+            cur = os.path.dirname(cur)
+        return None
+
     def _permitted(self, path: str) -> str | None:
         """Why a change here is allowed, or None. The writable half of the rule.
 
         The `also` list is checked before the git rule because it is the more
         specific answer: a path inside a repository that is also listed
         explicitly is reported as the listed one, which is what a reader of the
-        file expects to see.
+        file expects to see. The temp rule sits between them for the same
+        reason: it is a fact about the folder's name, not about a repository.
         """
         entry = self._also_entry(path)
         if entry is not None:
             return f"it sits under {entry}, listed in writable.also"
+        temp = self._temp_folder(path)
+        if temp is not None:
+            return (f"it is in {temp}, a folder whose name contains \"temp\" "
+                    f"(writable.temp_folders)")
         repo = self._git_root(path)
         if repo:
             return f"it is inside the git working tree at {repo}"
@@ -656,9 +690,10 @@ class Policy:
         if why:
             return None
         return (f"{target} is refused: it is read-only. No folder in its chain of "
-                f"parents holds a {GIT_MARKER} entry, and it is not under any "
-                f"writable.also entry in {self.display}. Nothing here is covered "
-                f"by git, so a change cannot be undone.")
+                f"parents holds a {GIT_MARKER} entry, it is not under any "
+                f"writable.also entry in {self.display}, and no folder above it "
+                f"is a temp folder. Nothing here is covered by git, so a change "
+                f"cannot be undone.")
 
     def _refusal_message(self, target: str, offending: str,
                          entry: str, note: str) -> str:
@@ -784,7 +819,8 @@ class Policy:
                     "  change     REFUSED - read-only",
                     "  rule       nothing in the policy covers this path",
                     f"  reason     no {GIT_MARKER} entry in its chain of parents, "
-                    f"and not under any writable.also entry",
+                    f"not under any writable.also entry, and no temp folder "
+                    f"above it with writable.temp_folders",
                 ]
 
         repo = self._git_root(norm)
@@ -1414,6 +1450,8 @@ def serve() -> int:
         # that changes as repositories are cloned. The rule is what matters.
         for entry, raw, note in POLICY.writable_also:
             log(f"  writable also: {raw}" + (f"  ({note})" if note else ""))
+        if POLICY.temp_folders:
+            log("  writable: folders whose name contains \"temp\" (writable.temp_folders)")
         for _entry, raw, _note in POLICY.prohibited:
             log(f"  prohibited: {raw}")
     else:
@@ -1621,6 +1659,8 @@ def selftest() -> int:
     plain.mkdir()
     (plain / "loose.txt").write_text("loose\n", encoding="utf-8")
     (work / "gone").mkdir()
+    tempdir = work / "temp"
+    tempdir.mkdir()
 
     def json_at(name, data):
         target = work / name
@@ -1689,6 +1729,40 @@ def selftest() -> int:
                                   "content": "scratch\n"}))
     check("`also` reaches below the entry itself",
           "created" in call_tool("create_dir", {"path": str(scratch / "inner")}))
+
+    # The temp rule is opt-in, and this selftest runs under %TEMP% - so a path
+    # inside `work` is a temp folder's child no matter what the leaf is called.
+    # The rule is therefore exercised under its own policy, and the leaf test
+    # asks the method directly rather than trying to build a path outside the
+    # system temp tree.
+    try:
+        call_tool("write_file", {"path": str(tempdir / "scratch.txt"), "content": "x\n"})
+        check("without writable.temp_folders a temp folder is read-only", False)
+    except Refused as exc:
+        check("without writable.temp_folders a temp folder is read-only",
+              "read-only" in str(exc), str(exc))
+
+    temp_policy = json_at("temp-policy.json", {
+        "enforce": True,
+        "writable": {"git_repositories": True, "temp_folders": True},
+        "prohibited": [{"path": "**\\.strata-backups\\**",
+                        "note": "THE OLD BACKUP FOLDER."}],
+    })
+    _install_root(work, temp_policy)
+    check("with writable.temp_folders a temp folder is writable",
+          "created" in call_tool("write_file",
+                                 {"path": str(tempdir / "scratch.txt"),
+                                  "content": "temp\n"}))
+    check("the temp rule reaches below the folder",
+          "created" in call_tool("create_dir", {"path": str(tempdir / "inner")}))
+    check("a file named temp is not itself a temp folder",
+          POLICY._temp_folder(r"C:\notes\temp.txt") is None)
+    check("a folder named temp is a temp folder",
+          POLICY._temp_folder(r"C:\notes\temp\x") is not None)
+    check("--explain on a temp folder names the temp rule",
+          "WRITABLE" in POLICY.describe(str(tempdir / "x"))
+          and "temp_folders" in POLICY.describe(str(tempdir / "x")))
+    _install_root(work, base)
 
     check("a move inside a git tree is allowed",
           "moved" in call_tool("move_path",

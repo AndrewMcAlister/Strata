@@ -1,0 +1,149 @@
+{
+ "exe": "D:\\Strata\\engine\\strata.exe",
+ "args": [
+  "--pack",
+  "D:\\Strata-data\\packs\\unsloth-ud-q4_k_xl",
+  "--native",
+  "D:\\Strata-data\\models\\unsloth\\Qwen3.8-Flash-Next-GGUF\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+  "--ple-gguf",
+  "D:\\Strata-data\\models\\unsloth\\Qwen3.8-Flash-Next-GGUF\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+  "--expert-profile",
+  "C:\\Strata-scratch\\expert\\expert-profile-learned-70k-2026-11-07.bin",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--max-context",
+  "94208",
+  "--kv",
+  "int8",
+  "--kv-resident",
+  "32768",
+  "--resident-budget-gib",
+  "40",
+  "--vram-reserve-mib",
+  "1472",
+  "--conversation-cache-mib",
+  "4096",
+  "--draft",
+  "dflash2",
+  "--draft-model",
+  "D:\\Strata-data\\dflash2\\qwen3.8-flash-next-dflash2.q4_0.pack",
+  "--draft-fallback",
+  "none",
+  "--mtp-draft-vocab",
+  "D:\\Strata-data\\mtp\\rt\\draft_vocab.bin",
+  "--spec",
+  "6",
+  "--draft-conf",
+  "0.9",
+  "--draft-cap",
+  "4"
+ ],
+ "cwd": "D:\\Strata",
+ "tokenizer": "D:\\Strata-data\\packs\\unsloth-ud-q4_k_xl\\tokenizer",
+ "model_name": "qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision",
+ "log": "C:\\Strata-scratch\\strata-q4_k_xl_dflash2_78k_novision.log",
+ "lib_dirs": [
+  "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.4\\bin",
+  "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.4\\bin\\x64"
+ ],
+ "port": 8080,
+ "env": {
+  "STRATA_HC_Q8": "1",
+  "STRATA_ADAPT_ASYNC": "1",
+  "STRATA_RAM_ADAPT": "1",
+  "STRATA_UNBUFFERED_LOAD": "1"
+ },
+ "gpu": 0,
+ "gpus_asked": true,
+ "args_written": [
+  "--pack",
+  "D:\\Strata-data\\packs\\unsloth-ud-q4_k_xl",
+  "--native",
+  "D:\\Strata-data\\models\\unsloth\\Qwen3.8-Flash-Next-GGUF\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+  "--ple-gguf",
+  "D:\\Strata-data\\models\\unsloth\\Qwen3.8-Flash-Next-GGUF\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+  "--expert-profile",
+  "C:\\Strata-scratch\\expert\\expert-profile-learned-70k-2026-11-07.bin",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--max-context",
+  "94208",
+  "--kv",
+  "int8",
+  "--kv-resident",
+  "32768",
+  "--resident-budget-gib",
+  "40",
+  "--vram-reserve-mib",
+  "1472",
+  "--conversation-cache-mib",
+  "4096",
+  "--draft",
+  "dflash2",
+  "--draft-model",
+  "D:\\Strata-data\\dflash2\\qwen3.8-flash-next-dflash2.q4_0.pack",
+  "--draft-fallback",
+  "none",
+  "--mtp-draft-vocab",
+  "D:\\Strata-data\\mtp\\rt\\draft_vocab.bin",
+  "--spec",
+  "6",
+  "--draft-conf",
+  "0.9",
+  "--draft-cap",
+  "4"
+ ],
+ "drafting": "dflash2",
+ "reasoning_budget_tokens": 4096,
+ "sampling": {
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "top_k": 20
+ },
+ "fit_max_tokens": true,
+ "mcp": {
+  "timeout_s": 60,
+  "max_result_chars": 20000,
+  "max_rounds": 24
+ },
+ "mcp_servers": {
+  "web": {
+   "command": "D:\\Strata\\.venv\\Scripts\\python.exe",
+   "args": [
+    "D:\\Strata\\tools\\web_search_mcp.py"
+   ]
+  },
+  "files": {
+   "command": "D:\\Strata\\.venv\\Scripts\\python.exe",
+   "args": [
+    "D:\\Strata\\tools\\filesystem_mcp.py",
+    "--root",
+    "D:\\",
+    "--policy",
+    "D:\\strata-data.json"
+   ]
+  },
+  "models": {
+   "command": "D:\\Strata\\.venv\\Scripts\\python.exe",
+   "args": [
+    "D:\\Strata\\tools\\filesystem_mcp.py",
+    "--root",
+    "D:\\Strata-data",
+    "--policy",
+    "D:\\Strata\\models-readonly-policy.json"
+   ]
+  },
+  "terminal": {
+   "command": "D:\\Strata\\.venv\\Scripts\\python.exe",
+   "args": [
+    "D:\\Strata\\tools\\terminal_mcp.py",
+    "--cwd",
+    "D:\\"
+   ]
+  }
+ }
+}

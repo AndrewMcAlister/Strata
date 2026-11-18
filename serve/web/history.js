@@ -19,7 +19,8 @@
   // the name in the list: what the user called it, else the first line of their first question, else the caller's word for "new"
   function chatTitle(c, untitled = "New chat") {
     if (c.title) return c.title;
-    const first = (c.messages.find((m) => m.role === "user") || {}).text || "";
+    // a compacted note (compact.js) is a user message too, but it is not something the user asked
+    const first = (c.messages.find((m) => m.role === "user" && !m.compacted) || {}).text || "";
     return first.split("\n")[0].trim().slice(0, TITLE_MAX) || untitled;
   }
 
