@@ -23,6 +23,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "Scripts" / "Strata_Start.bat"
 LINES = SCRIPT.read_text(encoding="utf-8").splitlines()
+ENSURE = ROOT / "Scripts" / "Strata-EnsureRunning.ps1"
+STACK = ROOT / "Scripts" / "StrataStack.ps1"
 
 
 def line_of(needle: str) -> int:
@@ -109,6 +111,45 @@ class StrataStart(unittest.TestCase):
         self.assertIn("/newest", "\n".join(LINES[:40]))                   # the header comment
         self.assertGreater(line_of("echo    Strata_Start.bat /newest"), -1)
         self.assertGreater(line_of('if defined NEWEST set "CHILDARGS=!CHILDARGS! /newest"'), -1)
+
+
+class EnsureRunningOnAServiceMachine(unittest.TestCase):
+    """The watchdog starts /window, which is process mode: Strata_Start.bat stops the service
+    to free 8080 first. A model switch is a stop and start of that service, so the check must
+    see the service before it considers the port, and then start nothing."""
+
+    def setUp(self):
+        self.text = ENSURE.read_text(encoding="utf-8")
+        self.lines = self.text.splitlines()
+
+    def line_of(self, needle: str) -> int:
+        return next((i for i, line in enumerate(self.lines) if needle in line), -1)
+
+    def test_the_service_is_detected_before_the_flag_and_the_start(self):
+        guard = self.line_of("Get-Service -Name $serviceName")
+        self.assertGreater(guard, -1)
+        self.assertLess(guard, self.line_of("flagTool acquire"))
+        self.assertLess(guard, self.line_of("Start-Process -FilePath 'cmd.exe'"))
+
+    def test_an_installed_service_is_left_alone(self):
+        guard = self.text.index("if ($null -ne $service)")
+        exit_at = self.text.index("exit 0", guard)
+        self.assertLess(exit_at, self.text.index("Start-Process -FilePath 'cmd.exe'"))
+        self.assertIn("leaving the model to it", self.text)
+        self.assertIn("the service installed   nothing happens", self.text)
+
+
+class StackStartDoesNotStopTheService(unittest.TestCase):
+    """The batch switches a service itself. Stopping it here was a second elevation, and when
+    the switch's prompt was declined the service stayed stopped."""
+
+    def test_a_running_service_is_not_stopped_before_the_batch_switches_it(self):
+        text = STACK.read_text(encoding="utf-8")
+        guard = text.index("$serviceOwnsPort")
+        conditional = text.index("if (StrataAnswering -and -not $serviceOwnsPort)")
+        stop = text.index('& cmd.exe /c "$BATCH_STOP /quiet"')
+        self.assertLess(guard, conditional)
+        self.assertLess(conditional, stop)
 
 
 if __name__ == "__main__":

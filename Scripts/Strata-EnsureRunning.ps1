@@ -29,7 +29,18 @@
     The sentiment worker starts the Strata *service* the same way and honours the same flag
     (sentiment-worker/strata.py: ensure()), so the two never compete.
 
+    THE SERVICE
+
+    A machine with the Strata Windows service installed is not this check's business. Its
+    model is the service's, and /window above makes room for a process by stopping that
+    service to free port 8080. A model switch is a stop and a start of the service, so for a
+    few seconds the port is closed - exactly when this check would see "nothing answering"
+    and stop the switch it is supposed to protect. The service is detected first, and then
+    this check starts nothing; the service's own supervisor and the sentiment worker keep it
+    alive. This check is for a machine with no service.
+
         port 8080 answering     nothing happens (no second model, no fight over the port)
+        the service installed   nothing happens (the service owns the model and the port)
         a fresh flag            waits up to five minutes for the port, then does nothing
         nothing else            the batch is started with /newest /noopen /window
         what it did             C:\Strata-scratch\ensure-running.log
@@ -40,6 +51,7 @@
 #>
 
 $port = 8080
+$serviceName = 'Strata'
 $batch = 'D:\Strata\Scripts\Strata_Start.bat'
 $log = 'C:\Strata-scratch\ensure-running.log'
 $flagTool = 'D:\Strata\Scripts\starting_flag.py'
@@ -70,6 +82,15 @@ function Test-FlagFresh {
 }
 
 if (Test-Listening) { exit 0 }
+
+# The service owns the model whenever it is installed. /window is process mode, and its
+# first act is to stop the service for the port (Strata_Start.bat); during a switch that
+# would stop the stop-then-start that is already in progress. See THE SERVICE above.
+$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($null -ne $service) {
+    Write-Log "the Strata service is installed ($($service.Status)); leaving the model to it"
+    exit 0
+}
 
 # A Strata that is loading holds the flag and does not own the port yet.
 if (Test-FlagFresh) {

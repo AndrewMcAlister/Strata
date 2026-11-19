@@ -36,6 +36,7 @@ $BATCH_START = 'D:\Strata\Scripts\Strata_Start.bat'
 $BATCH_STOP = 'D:\Strata\Scripts\Strata_Stop.bat'
 $TASK = 'Strata_EnsureRunning'
 $WORKER = 'SentimentWorker'
+$SERVICE = 'Strata'
 
 function Say([string]$text, [string]$colour = 'Gray') {
     Write-Host $text -ForegroundColor $colour
@@ -76,11 +77,15 @@ switch ($Action) {
     'Start' {
         if (-not (SetWatchdog $true)) { Say ("watchdog: could not be enabled (task '{0}')" -f $TASK) 'Yellow' }
 
-        # The stop happens HERE, not through the batch's /restart. Strata_Start.bat treats a
-        # running server as "this is the model you meant" and /restart reloads that same config -
-        # it never asks which model. Stopping first means the batch starts with nothing running,
-        # so it offers the menu again. That is the whole point: one click to change model.
-        if (StrataAnswering) {
+        # The stop happens HERE only for a console server. The batch's /restart would reload
+        # the same config instead of offering the menu, so a console server that holds 8080
+        # is stopped first. A running service is left alone: Strata_Start.bat's service mode
+        # stops and starts the service itself, with the chosen config, and a stop here would
+        # be a second elevation - one that leaves the service stopped when the switch's
+        # prompt is declined.
+        $service = Get-Service -Name $SERVICE -ErrorAction SilentlyContinue
+        $serviceOwnsPort = $null -ne $service -and $service.Status -ne 'Stopped'
+        if (StrataAnswering -and -not $serviceOwnsPort) {
             Say 'stopping the running model first...' 'Cyan'
             & cmd.exe /c "$BATCH_STOP /quiet" | Out-Null
             Start-Sleep -Seconds 2
