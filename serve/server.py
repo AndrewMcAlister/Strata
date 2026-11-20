@@ -7155,6 +7155,15 @@ def _debug_req(api, req, messages, tools, max_new, thinking, prompt_tokens):
 
 
 # ------------------------------------------------------------------------------------------------ MCP tool loop
+NUDGE_MAX = 2                                    # one more round each, per turn: a habit, not a treadmill
+NUDGE_TEXT = (
+    "You described code in your reply and wrote no file this round. Write it now with the file tools, as the "
+    "work stands - a file that exists can be edited afterwards, while text in the reply is lost if the turn "
+    "stops. If the code was only an example for the person rather than part of the task, say so and finish "
+    "without a tool call."
+)
+
+
 def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new, max_req, sampling, cancel,
                  mcp_names):
     """Service.run with the MCP tools executed here: the model writes a call to an MCP tool, the server runs it, adds
@@ -7167,6 +7176,8 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
     turn as always (the client answers it).  MCP calls written in the same answer are then not run (their results
     could not reach the model before the client's)."""
     max_rounds = int(hub.settings["max_rounds"])
+    nudge = bool(hub.settings.get("write_nudge", True)) and bool(mcp_names)
+    nudges = 0
     total, rounds, done = 0, 0, None
     finalizing = False
     messages = list(messages)
@@ -7194,6 +7205,26 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
         total += done["completion_tokens"]
         run_them = calls and not own_calls and not finalizing and done["finish"] == "stop" and not cancel.is_set()
         if not run_them:
+            # The write nudge: a round that ended with no tool call of any kind, whose answer describes code in
+            # fences, is the shape of "the model held the work in its reply".  One more round, with its own text
+            # in the conversation, is the only way the server can turn "I would write this" into the file
+            # existing - and the file is what survives a turn that stops.
+            if (nudge and nudges < NUDGE_MAX and not calls and not own_calls and not finalizing
+                    and done["finish"] == "stop" and not cancel.is_set() and "```" in "".join(text)):
+                nudges += 1
+                messages.append({"role": "assistant", "content": "".join(text).strip()})
+                system_end = next((index for index, message in enumerate(messages)
+                                   if message.get("role") not in ("system", "developer")), len(messages))
+                messages.insert(system_end, {"role": "system", "content": NUDGE_TEXT})
+                yield "mcp", {"event": "nudge", "n": nudges}
+                print(f"[strata] write nudge {nudges}/{NUDGE_MAX}: the round described code and wrote no file",
+                      flush=True)
+                try:
+                    ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req, cancel=cancel, api="mcp")
+                except ClientGone:                           # the client left before the nudge round: as ever
+                    done = {**done, "finish": "cancel"}
+                    break
+                continue
             for c in calls:                              # announced, never run: close them in the client's view
                 yield "mcp", {"event": "result", "id": c.id, "ok": False, "skipped": True, "text": "not run",
                               "chars": 0, "truncated": False, "ms": 0}

@@ -510,6 +510,48 @@ class ToolLoop(unittest.TestCase):
             urllib.request.urlopen(self.base + "/mcp", timeout=10)
         self.svc.api_key = ""
 
+    # -- the write nudge: a round that describes code and writes no file earns one more round ---------------
+    FENCED = "</think>\n\nHere is the file:\n\n```rust\nfn main() {}\n```\n"
+
+    def test_a_described_file_with_no_write_earns_one_more_round(self):
+        self.start(self.FENCED, "</think>\n\nDone.")
+        code, text = self.post({"strata_mcp": True})
+        self.assertEqual(code, 200, text)
+        cs = self.chunks(text)
+        mcp = [c["strata_mcp"] for c in cs if "strata_mcp" in c]
+        self.assertEqual([m["event"] for m in mcp], ["nudge"])
+        self.assertEqual(len(self.engine.prompts), 2, "one round, then the nudge round")
+        second = self.engine.prompt_text(1)
+        self.assertIn("You described code in your reply and wrote no file this round", second)
+        self.assertIn("fn main() {}", second)                 # the model sees the code it described
+        self.assertIn('"name": "fake__echo"', second)         # and the tools are still offered
+        self.assertIn("Done.", "".join(c["choices"][0]["delta"].get("content") or "" for c in cs))
+        self.assertEqual(cs[-1]["choices"][0]["finish_reason"], "stop")
+
+    def test_prose_without_code_is_left_alone(self):
+        self.start("</think>\n\nNo code here, just an answer.")
+        code, text = self.post({"strata_mcp": True})
+        self.assertEqual(code, 200, text)
+        self.assertFalse([c for c in self.chunks(text) if (c.get("strata_mcp") or {}).get("event") == "nudge"])
+        self.assertEqual(len(self.engine.prompts), 1)
+
+    def test_the_nudge_happens_at_most_twice(self):
+        self.start(self.FENCED)                                # the last script repeats: a model that never writes
+        code, text = self.post({"strata_mcp": True})
+        self.assertEqual(code, 200, text)
+        cs = self.chunks(text)
+        nudges = [c["strata_mcp"] for c in cs if (c.get("strata_mcp") or {}).get("event") == "nudge"]
+        self.assertEqual([n["n"] for n in nudges], [1, 2])
+        self.assertEqual(len(self.engine.prompts), 3, "the first round and two nudges, then it stops")
+
+    def test_the_nudge_can_be_turned_off(self):
+        self.hub.settings["write_nudge"] = False
+        self.start(self.FENCED)
+        code, text = self.post({"strata_mcp": True})
+        self.assertEqual(code, 200, text)
+        self.assertFalse([c for c in self.chunks(text) if (c.get("strata_mcp") or {}).get("event") == "nudge"])
+        self.assertEqual(len(self.engine.prompts), 1)
+
 
 class NoServers(unittest.TestCase):
     def test_opt_in_without_servers_is_a_plain_chat(self):
