@@ -8995,6 +8995,8 @@ def make_handler(svc: Service):
                           "without them, and any call it makes is refused as text", flush=True)         # still call one
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
+                if use_mcp:
+                    messages = with_work_in_files(messages)   # write files as the work is done, not at the end
             if force and use_mcp:
                 raise ValueError("a forced tool_choice with MCP tools is not supported")
             svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
@@ -9691,6 +9693,34 @@ def clean_panel_settings(d) -> dict:
             raise ValueError(f"unknown setting {key!r}")
         out[key] = value
     return out
+
+
+WRITE_AS_YOU_GO = (
+    "Work in the files, not in the reply. You have tools that read and write files on this PC:\n"
+    "- Write a file as soon as you are confident of its content. Do not compose code in your reply and write "
+    "it all at the end: a turn that stops before the end loses everything you were holding.\n"
+    "- A file you have written can be edited afterwards, so writing early costs nothing; a rewrite from "
+    "memory costs the whole file.\n"
+    "- Read a file before you edit it, and write the smallest change that finishes the job.\n"
+    "- When the task calls for a commit, commit once when the task is done, not after each step."
+)
+
+
+def with_work_in_files(messages: list[dict]) -> list[dict]:
+    """The tool guidance a chat with MCP tools starts with: write the files as the work is done.
+
+    The model used to hold whole files in its reply and write them at the end of the turn, so a turn that
+    stopped early - a crash, the round limit, a cancelled request - lost everything it had written.  The
+    guidance is merged into the client's own system message when there is one (some templates accept only
+    a single system message), and prepended otherwise.
+    """
+    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        content = first.get("content")
+        if isinstance(content, str):
+            first["content"] = (content.rstrip() + "\n\n" + WRITE_AS_YOU_GO).strip() if content.strip() else WRITE_AS_YOU_GO
+            return [first] + list(messages[1:])
+    return [{"role": "system", "content": WRITE_AS_YOU_GO}] + list(messages)
 
 
 def split_joined_args(cfg: dict) -> None:
