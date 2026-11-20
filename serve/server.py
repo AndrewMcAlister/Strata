@@ -4886,6 +4886,8 @@ class Service:
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
         self.model_arch = None                        # the config's family ("qwen4exp", "qwen35moe"): None = no model-card defaults
         self.shared = {}                              # the web app's Chat settings for every client (POST /settings)
+        self.panel = {}                               # the web app's own Chat settings, read back on load
+        self.shared_path = None                       # the sidecar both are saved in (set from --config)
         self.shared_path = None                       # where they are kept between starts (next to the config)
         self.config_effort = None                     # #1641: the config's "reasoning_effort": the level for requests with none
         self.keep_awake = None                        # #1727 (opt-in): serve.keepawake.KeepAwake, the config's "prevent_sleep"
@@ -5628,15 +5630,37 @@ class Service:
     def set_shared(self, defaults) -> dict:
         """The Chat settings every client gets for what it leaves out; {} / None = clients use their own again."""
         self.shared = clean_shared_defaults(defaults)
-        if self.shared_path:
-            try:
-                if self.shared:
-                    Path(self.shared_path).write_text(json.dumps(self.shared, indent=1), encoding="utf-8")
-                else:
-                    Path(self.shared_path).unlink(missing_ok=True)
-            except OSError as e:
-                print(f"[strata] could not save the shared settings: {e}", flush=True)
+        self.save_chat_settings()
         return self.shared
+
+    def set_panel(self, panel) -> dict:
+        """The web app's own Chat settings, kept so the next session starts where this one ended.
+
+        Separate from ``set_shared`` on purpose: ``shared`` is what *other* apps get for what they leave
+        out, and the "Use for other apps too" switch owns it.  This is the page's own state, saved on
+        every Apply and read back on load, so a cleared browser or a new day does not silently drop the
+        thinking level, the sampling or the tool switches.
+        """
+        self.panel = clean_panel_settings(panel)
+        self.save_chat_settings()
+        return self.panel
+
+    def save_chat_settings(self) -> None:
+        """Write both kinds of Chat setting to the sidecar, so they outlive the process.
+
+        One file, two sections.  An older server wrote the defaults dict on its own; the loader still
+        accepts that shape, and the file is removed only when there is nothing at all to keep.
+        """
+        if not self.shared_path:
+            return
+        try:
+            if not self.shared and not self.panel:
+                Path(self.shared_path).unlink(missing_ok=True)
+                return
+            body = {"defaults": self.shared, "panel": self.panel}
+            Path(self.shared_path).write_text(json.dumps(body, indent=1), encoding="utf-8")
+        except OSError as e:
+            print(f"[strata] could not save the Chat settings: {e}", flush=True)
 
     def effort_default(self) -> str | None:
         """The thinking level of a request that names none: the Chat settings shared with apps first, then the config's
@@ -8343,7 +8367,7 @@ def make_handler(svc: Service):
                 return
             if path == "/settings":
                 if self._authorized():
-                    self._json(200, {"shared": bool(svc.shared), "defaults": svc.shared})
+                    self._json(200, {"shared": bool(svc.shared), "defaults": svc.shared, "panel": svc.panel})
                 return
             if path == "/config":                            # #564: the Settings view's keys of the run config
                 if self._authorized():
@@ -8851,18 +8875,25 @@ def make_handler(svc: Service):
                 return
             try:
                 req = json.loads(body or b"{}")
-                if not isinstance(req, dict) or "defaults" not in req:
+                if not isinstance(req, dict) or ("defaults" not in req and "panel" not in req):
                     self._json(400, {"error": {"type": "invalid_request_error",
-                                              "message": 'the body must be {"defaults": {...}} to set them, '
-                                                         'or {"defaults": null} to clear them'}})
+                                              "message": 'the body must carry "defaults" (what other apps get, '
+                                                         'null to clear) and/or "panel" (this page\'s own settings)'}})
                     return
-                shared = svc.set_shared(req["defaults"])
+                if "panel" in req:
+                    panel = svc.set_panel(req["panel"])
+                    print("[strata] the web app's Chat settings are saved: " +
+                          (", ".join(f"{k}={v}" for k, v in panel.items()) if panel else "(cleared)"), flush=True)
+                shared = svc.shared
+                if "defaults" in req:
+                    shared = svc.set_shared(req["defaults"])
             except ValueError as e:
                 self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
                 return
-            print("[strata] other apps now use the Chat settings: " + ", ".join(f"{k}={v}" for k, v in shared.items())
-                  if shared else "[strata] other apps use their own settings again", flush=True)
-            self._json(200, {"shared": bool(shared), "defaults": shared})
+            if "defaults" in req:
+                print("[strata] other apps now use the Chat settings: " + ", ".join(f"{k}={v}" for k, v in shared.items())
+                      if shared else "[strata] other apps use their own settings again", flush=True)
+            self._json(200, {"shared": bool(shared), "defaults": shared, "panel": svc.panel})
 
         def _sse(self):
             self._note(http_status=200)
@@ -9615,6 +9646,50 @@ def clean_shared_defaults(d) -> dict:
         else:
             raise ValueError(f"unknown setting {key!r}")
         out[key] = float(value) if key in ("temperature", "top_p") else value
+    return out
+
+
+def clean_panel_settings(d) -> dict:
+    """The web app's own Chat settings (POST /settings {"panel": ...}), so the next session starts
+    where this one ended.  Only known keys, each checked; ValueError names a bad one.
+
+    Unlike the defaults, an empty ``max``/``seed`` is a *value* here — "until done" and "random" are
+    choices, not absences — so the empty strings are kept rather than skipped.
+    """
+    if d is None:
+        return {}
+    if not isinstance(d, dict):
+        raise ValueError("panel must be an object")
+    out = {}
+    for key, value in d.items():
+        number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if key == "thinking":
+            if value not in ("off", "low", "medium", "high"):
+                raise ValueError("thinking: off, low, medium or high")
+        elif key == "temperature":
+            if not number or not 0 <= value <= 2:
+                raise ValueError("temperature: 0..2")
+            value = float(value)
+        elif key == "top_p":
+            if not number or not 0 < value <= 1:
+                raise ValueError("top_p: 0 < top_p <= 1")
+            value = float(value)
+        elif key == "top_k":
+            if not number or value != int(value) or not 1 <= value <= 64:
+                raise ValueError("top_k: an integer 1..64")
+            value = int(value)
+        elif key in ("max", "seed"):
+            if not isinstance(value, str) or (value and not value.isdigit()):
+                raise ValueError(f"{key}: a whole number as text, or empty")
+        elif key == "whileBusy":
+            if value not in ("wait", "queue", "interject"):
+                raise ValueError("whileBusy: wait, queue or interject")
+        elif key in ("math", "show", "esp", "mcp", "chatList", "chatEdit"):
+            if not isinstance(value, bool):
+                raise ValueError(f"{key}: true or false")
+        else:
+            raise ValueError(f"unknown setting {key!r}")
+        out[key] = value
     return out
 
 
@@ -10756,15 +10831,29 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
     svc.backend = cfg.get("backend")                    # "hip": the AMD cards' readings come from sysfs (#301)
     if a.config:
         svc.config_path = a.config                      # #564: the web page's Settings view
-    if a.config:                                        # the Chat settings shared with other apps, from last time
+    if a.config:                                        # the Chat settings to restore, from last time
         svc.shared_path = str(Path(a.config).with_suffix("")) + ".shared-settings.json"
         try:
-            svc.shared = clean_shared_defaults(json.loads(Path(svc.shared_path).read_text(encoding="utf-8")))
-            if svc.shared:
-                print("[strata] other apps use the Chat settings: " +
-                      ", ".join(f"{k}={v}" for k, v in svc.shared.items()), flush=True)
+            saved = json.loads(Path(svc.shared_path).read_text(encoding="utf-8-sig"))   # utf-8-sig: a hand-edited file may carry a BOM
         except (OSError, ValueError):
-            svc.shared = {}
+            saved = {}
+        # Two shapes: this server writes {"defaults", "panel"}, the first one wrote the defaults dict
+        # itself.  Both are read, so an upgrade does not lose the settings a person already had.
+        if isinstance(saved, dict) and ("defaults" in saved or "panel" in saved):
+            defaults, panel = saved.get("defaults"), saved.get("panel")
+        else:
+            defaults, panel = saved, None
+        try:
+            svc.shared = clean_shared_defaults(defaults)
+            svc.panel = clean_panel_settings(panel)
+        except ValueError:
+            svc.shared, svc.panel = {}, {}
+        if svc.shared:
+            print("[strata] other apps use the Chat settings: " +
+                  ", ".join(f"{k}={v}" for k, v in svc.shared.items()), flush=True)
+        if svc.panel:
+            print("[strata] the web app's Chat settings are restored: " +
+                  ", ".join(f"{k}={v}" for k, v in svc.panel.items()), flush=True)
     if hub is not None:
         import atexit
         svc.mcp = hub
