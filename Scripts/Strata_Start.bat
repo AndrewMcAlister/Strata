@@ -48,9 +48,8 @@ rem    key  model                                                context    draf
 rem    a    qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision      94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (coding, the default)
 rem    b    qwen3.8-flash-next-iq2_xs (20k)                      20,480     mtp      no      IQ2_XS    strata-iq2_xs-20k.json                     (smallest, fastest)
 rem    c    qwen3.8-flash-next-iq3_xxs-dflash2 (94k)             94,208     dflash2  no      IQ3_XXS   strata-iq3_xxs-dflash2.json                (chat)
-rem    d    qwen3.8-flash-next-q3_k_xl (70k)                     71,680     dflash2  yes     Q3_K_XL   strata-q3_k_xl.json
-rem    e    qwen3.8-flash-next-q4_k_xl_dflash2_143k             143,360     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_143k.json
-rem    f    qwen3.8-flash-next-q4_k_xl_dflash2_94k               94,208     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_94k.json
+rem    d    qwen3.8-flash-next-q4_k_xl_dflash2_143k              143,360     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_143k.json
+rem    e    qwen3.8-flash-next-q4_k_xl_dflash2_94k               94,208     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_94k.json
 rem
 rem  One drafter at a time: dflash2 (a block drafter, ~1.2 GB of VRAM, its configs reserve
 rem  1280 MiB) or the MTP layer. b still runs the MTP layer.
