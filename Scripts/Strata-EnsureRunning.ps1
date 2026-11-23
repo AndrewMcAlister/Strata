@@ -29,7 +29,7 @@
     The sentiment worker starts the Strata *service* the same way and honours the same flag
     (sentiment-worker/strata.py: ensure()), so the two never compete.
 
-        port 8080 answering     nothing happens (no second model, no fight over the port)
+        the port answering    nothing happens (no second model, no fight over the port)
         a fresh flag            waits up to five minutes for the port, then does nothing
         nothing else            the batch is started with /newest /noopen /window
         what it did             C:\Strata-scratch\ensure-running.log
@@ -40,6 +40,13 @@
 #>
 
 $port = 8080
+$portHelper = 'D:\Strata\Scripts\Strata_Port.ps1'
+if (Test-Path -LiteralPath $portHelper) {
+    # The port comes from service.conf when it names one (Strata_Port.ps1 reads it): another program
+    # can own 8080, and then a check of 8080 alone would start a second Strata every 15 minutes.
+    $asked = & powershell -NoProfile -ExecutionPolicy Bypass -File $portHelper 2>$null
+    if ("$asked".Trim() -match '^\d+$') { $port = [int]"$asked".Trim() }
+}
 $batch = 'D:\Strata\Scripts\Strata_Start.bat'
 $log = 'C:\Strata-scratch\ensure-running.log'
 $flagTool = 'D:\Strata\Scripts\starting_flag.py'

@@ -24,7 +24,7 @@
 #              models keeps the service and the port (-Config PATH).
 #   Status     say what the service and the model are doing.
 #   Logs       show the end of the newest service log (-Tail N).
-#   Edit       open service.conf in Notepad to change the model.
+#   Edit       open service.conf in Notepad to change the model, the port or the engine.
 #
 # Options:
 #   -Config PATH   Install and Serve: the model config to serve.
@@ -162,17 +162,28 @@ if ($needsAdmin -and -not (Test-Admin)) {
     # Start-Process -Verb RunAs uses ShellExecute, which cannot redirect. The
     # elevated copy writes its own output to a temp file, and that file is shown
     # here after it exits, so the result stays in this window.
+    #
+    # The elevated copy runs the same command as the direct path at the end of this
+    # file: the interpreter Find-Python found, Strata_Service.py, then the subcommand
+    # (install, serve, ...). It used to name the .py file on its own and pass
+    # PowerShell's -Action/-Name - that relies on the .py file association, which on
+    # some PCs is an editor or another app (one printed Electron/Chromium warnings
+    # and never installed anything), and the script reads a subcommand, not -Action.
     $temp = Join-Path $env:TEMP ('strata-service-{0}.log' -f [guid]::NewGuid().ToString('N'))
-    $parts = @('-Action', (Quote-Text $Action), '-Name', (Quote-Text $Name))
+    $parts = @()
+    foreach ($extra in $python.Args) { $parts += $extra }
+    $parts += @($serviceScript, $Action.ToLowerInvariant(), '--name', $Name)
     if ($Action -eq 'Install') {
-        if ($Config) { $parts += @('-Config', (Quote-Text $Config)) }
-        if ($NoStart) { $parts += '-NoStart' }
-        if ($Force) { $parts += '-Force' }
+        if ($Config) { $parts += @('--config', $Config) }
+        if ($NoStart) { $parts += '--no-start' }
+        if ($Force) { $parts += '--force' }
     }
-    if ($Action -eq 'Serve' -and $Config) { $parts += @('-Config', (Quote-Text $Config)) }
-    if ($Action -eq 'Uninstall' -and $Purge) { $parts += '-Purge' }
+    if ($Action -eq 'Serve' -and $Config) { $parts += @('--config', $Config) }
+    if ($Action -eq 'Uninstall' -and $Purge) { $parts += '--purge' }
+    if ($Action -eq 'Logs') { $parts += @('--tail', [string]$Tail) }
+    $quoted = ($parts | ForEach-Object { Quote-Text ([string]$_) }) -join ' '
     $inner = "& {0} {1} *>&1 | Tee-Object -FilePath {2}; exit `$LASTEXITCODE" -f `
-        (Quote-Text $serviceScript), ($parts -join ' '), (Quote-Text $temp)
+        (Quote-Text $python.Exe), $quoted, (Quote-Text $temp)
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
     Write-Host "Asking for Administrator rights..." -ForegroundColor Cyan
     try {

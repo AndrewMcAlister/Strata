@@ -545,7 +545,7 @@ def detect_backend(environ=None) -> tuple[str | None, str]:
     adapters = windows_display_adapters() if host_platform().startswith("windows") else []
     present = adapter_makes(adapters)
     if present:
-        return _first_make(present), "display adapters"
+        return _largest_vram_make(adapters, present), "display adapters"
     probes = (("cuda", ("nvidia-smi", "--query-gpu=name", "--format=csv,noheader")),
               ("hip", ("rocminfo",) if os.name != "nt" else ("hipInfo",)),
               ("sycl", ("sycl-ls",)))
@@ -575,8 +575,49 @@ def detect_backend(environ=None) -> tuple[str | None, str]:
 
 
 def _first_make(makes) -> str:
-    """The make Strata uses when a PC has cards of several: NVIDIA, then AMD, then Intel (the order of every probe)."""
+    """The make Strata uses when the cards do not say which one is the bigger: NVIDIA, then AMD, then Intel (the order
+    of every probe)."""
     return next(m for m in ("cuda", "hip", "sycl") if m in makes)
+
+
+def _dedicated_vram_gb(adapter: dict) -> float:
+    """The card's own memory in GiB, as the display adapter reports it; 0.0 when it reports no size. This is dedicated
+    memory, not a shared pool: an integrated GPU reports its small BIOS carve-out (or nothing), so it never outvotes a
+    card that holds its own memory (#4971, and the `vram_gb` the adapters already carry on Windows)."""
+    try:
+        return max(0.0, float(adapter.get("vram_gb") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _largest_vram_make(adapters: list[dict] | None, makes: set[str]) -> str:
+    """The make of the card with the most dedicated memory: the GPU the engine runs on. A PC with a 32 GiB Radeon and a
+    16 GiB GeForce starts its engine for the Radeon, whatever the order of the probes. A tie, and cards that report no
+    size at all, keep `_first_make`'s order, so the answer never depends on which adapter was listed first."""
+    amd_devices = {card.get("device") for card in windows_amd_cards(adapters or [])}
+    sizes: dict[str, float] = {}
+    for adapter in adapters or []:
+        make = _adapter_make(adapter, amd_devices)
+        if make in makes:
+            sizes[make] = max(sizes.get(make, 0.0), _dedicated_vram_gb(adapter))
+    best_make, best = "", 0.0
+    for make in ("cuda", "hip", "sycl"):
+        if sizes.get(make, 0.0) > best:                   # strictly bigger wins; a tie keeps the make order
+            best_make, best = make, sizes[make]
+    return best_make or _first_make(makes)
+
+
+def _adapter_make(adapter: dict, amd_devices: set) -> str:
+    """The engine family one Windows display adapter calls for; "" when it is no card Strata runs a model on. An
+    integrated Radeon is not a card (`windows_amd_cards` already leaves it out)."""
+    vendor = adapter.get("vendor")
+    if vendor == "10de":
+        return "cuda"
+    if vendor == "8086":
+        return "sycl"
+    if vendor == "1002" and adapter.get("device") in amd_devices:
+        return "hip"
+    return ""
 
 
 def adapter_makes(adapters: list[dict] | None) -> set[str]:
@@ -638,24 +679,31 @@ def wsl_amd_note(backend: str | None, dev_root: str = "/dev", wsl: bool | None =
 INTEGRATED_MAX_VRAM_MIB = 2048
 
 
+def _vram_bytes(card: Path) -> int | None:
+    """A Linux display adapter's own (dedicated) memory in bytes, from sysfs; None when it reports no size. Read-only."""
+    try:
+        return int((card / "device" / "mem_info_vram_total").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _own_vram(card: Path) -> bool | None:
     """Whether a display adapter has its own memory above `INTEGRATED_MAX_VRAM_MIB`; None when it reports no size. Read-only sysfs."""
-    try:
-        total = int((card / "device" / "mem_info_vram_total").read_text().strip())
-    except (OSError, ValueError):
+    total = _vram_bytes(card)
+    if total is None:
         return None
     return total > INTEGRATED_MAX_VRAM_MIB * 1024 * 1024
 
 
 def _drm_vendor_backend(root: str = "/sys/class/drm") -> str | None:
     """Linux without the vendor tools on PATH (a HIP box that runs ROCm from Python wheels has no rocminfo): the PCI
-    vendor of the display adapters decides. NVIDIA 0x10de -> cuda, AMD 0x1002 -> hip, Intel 0x8086 -> sycl, in that
-    order. An integrated GPU does not decide while another make has a card that is not integrated (#4971: a 512 MiB
-    Radeon APU made the whole PC an AMD machine beside the user's Intel Arc); when every card is integrated the old
-    order stands. Read-only sysfs, nothing is run."""
+    vendor of the display adapters decides, and the card with the most dedicated memory (`mem_info_vram_total`) decides
+    for its make. A tie keeps NVIDIA 0x10de, then AMD 0x1002, then Intel 0x8086. An integrated GPU does not decide while
+    another make has a card that is not integrated (#4971: a 512 MiB Radeon APU made the whole PC an AMD machine beside
+    the user's Intel Arc); when every card is integrated the old order stands. Read-only sysfs, nothing is run."""
     if not os.path.isdir(root):
         return None
-    cards: dict[str, list[bool | None]] = {}
+    cards: dict[str, list[tuple[bool | None, int]]] = {}
     try:
         for card in sorted(Path(root).glob("card[0-9]*")):
             if "-" in card.name:
@@ -664,15 +712,23 @@ def _drm_vendor_backend(root: str = "/sys/class/drm") -> str | None:
                 vendor = (card / "device" / "vendor").read_text().strip().lower()
             except OSError:
                 continue
-            cards.setdefault(vendor, []).append(_own_vram(card))
+            total = _vram_bytes(card)
+            cards.setdefault(vendor, []).append(
+                (None if total is None else total > INTEGRATED_MAX_VRAM_MIB * 1024 * 1024, total or 0))
     except OSError:
         return None
     order = (("0x10de", "cuda"), ("0x1002", "hip"), ("0x8086", "sycl"))
     if not any(v in cards for v, _ in order):
         return None
     # a make whose every card is positively integrated (a small own-memory reading) is skipped while another make has a card that is not
-    decisive = [v for v, _ in order if any(flag is not False for flag in cards.get(v, []))]
-    chosen = decisive[0] if decisive else next(v for v, _ in order if v in cards)
+    decisive = [v for v, _ in order if any(flag is not False for flag, _ in cards.get(v, []))]
+    if not decisive:
+        decisive = [v for v, _ in order if v in cards]
+    chosen, best = decisive[0], -1
+    for vendor in decisive:
+        size = max((total for _, total in cards.get(vendor, [])), default=0)
+        if size > best:                                   # strictly bigger wins; a tie keeps the make order
+            chosen, best = vendor, size
     return dict(order)[chosen]
 
 
@@ -844,14 +900,12 @@ def windows_amd_cards(adapters: list[dict] | None = None) -> list[dict]:
 
 
 def _windows_vendor_backend(adapters: list[dict] | None = None) -> str | None:
-    """Windows without nvidia-smi / hipInfo on PATH: the display adapters decide, NVIDIA first, then an AMD card (an AMD
-    integrated GPU alone is not one), as on Linux. Read-only registry, nothing is run."""
+    """Windows without nvidia-smi / hipInfo on PATH: the display adapters decide, as on Linux. The card with the most
+    dedicated memory decides the make; a tie keeps NVIDIA, then an AMD card (an AMD integrated GPU alone is not one),
+    then Intel. Read-only registry, nothing is run."""
     adapters = windows_display_adapters() if adapters is None else adapters
-    if any(a.get("vendor") == "10de" for a in adapters):
-        return "cuda"
-    if windows_amd_cards(adapters):
-        return "hip"
-    return None
+    makes = adapter_makes(adapters)
+    return _largest_vram_make(adapters, makes) if makes else None
 
 
 def cuda_archs_present(environ=None) -> list[str]:

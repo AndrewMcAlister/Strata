@@ -18,6 +18,12 @@ Which model the service serves is one editable file, ``service.conf``, written b
 ``install`` with every ``strata-*.json`` config in the Strata folder listed above the
 chosen line as a comment. Edit it, then restart the service.
 
+An optional ``engine=`` line in the same file names the engine to run instead of the
+run config's own ``exe``: a path (``D:\\Strata\\build-906-win\\strata.exe``) or
+``component:strata-engine``, the engine installed for this PC's graphics card. That is
+how one folder of model configs is shared by two PCs whose engines differ, and how a
+new engine is switched without editing a model config.
+
 Commands (normally through Scripts\\Strata_Service.ps1, which asks for elevation):
 
     install [--config PATH] [--no-start] [--force]
@@ -88,7 +94,7 @@ class ServiceError(Exception):
 
 # ------------------------------------------------------------------------------------------------ conf
 
-CONF_KEYS = ("config", "port", "host", "shutdown_timeout")
+CONF_KEYS = ("config", "port", "host", "shutdown_timeout", "engine")
 
 
 def parse_conf_text(text: str) -> tuple[dict, list[str]]:
@@ -135,8 +141,17 @@ def conf_values(text: str) -> dict:
         shutdown = float(values.get("shutdown_timeout") or 30)
     except ValueError:
         raise ServiceError("service.conf: shutdown_timeout must be a number of seconds") from None
+    engine = (values.get("engine") or "").strip()
+    if engine and not engine.startswith("component:"):
+        engine_path = Path(engine).expanduser()
+        if not engine_path.is_absolute():
+            engine_path = (ROOT / engine_path).resolve()
+        if not engine_path.is_file():
+            raise ServiceError(f"service.conf: engine={engine!r} is neither a file nor a component "
+                               f"reference (component:strata-engine is the engine installed for this PC)")
+        engine = str(engine_path)
     return {"config": str(path), "port": port, "host": values.get("host") or None,
-            "shutdown_timeout": shutdown,
+            "shutdown_timeout": shutdown, "engine": engine or None,
             "unknown": sorted(set(values) - set(CONF_KEYS))}
 
 
@@ -227,6 +242,10 @@ def render_conf(config: Path, models: list[dict]) -> str:
         "#port=8080",
         "#host=127.0.0.1",
         "#shutdown_timeout=30",
+        "#",
+        "# engine= runs another engine than the config's own \"exe\": a path, or",
+        "# component:strata-engine (the engine installed for this PC's graphics card).",
+        "#engine=component:strata-engine",
         "",
     ]
     return "\n".join(lines)
@@ -718,11 +737,38 @@ class Supervisor:
         self._profiles, self._runtime = profiles, runtime
         return True
 
+    def _engine_config(self, source: Path, engine: str | None) -> Path:
+        """The run config the profile points at. Without ``engine=`` it is the config itself. With it, a copy in the
+        service's own state folder whose ``"exe"`` is the configured engine, so one folder of model configs can serve
+        PCs whose engines differ (a packaged engine on one, a hand build on the other) without anyone editing them."""
+        if not engine:
+            return source
+        try:
+            data = json.loads(source.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            raise ServiceError(f"cannot read the model config {source} ({exc.__class__.__name__})") from None
+        if not isinstance(data, dict) or not data.get("exe") or not isinstance(data.get("args"), list):
+            raise ServiceError(f"{source} is not a Strata model config: it needs 'exe' and 'args'")
+        data["exe"] = engine
+        text = json.dumps(data, indent=1)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        target = STATE_DIR / "run-config.json"
+        try:
+            same = target.is_file() and target.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:                                      # said once per change, not once per watchdog turn
+            target.write_text(text, encoding="utf-8")
+            self.log(f"the run config for this start takes its engine from service.conf: {engine} "
+                     f"({source.name} names its own)")
+        return target
+
     def _ensure_profile(self, conf: dict) -> None:
         profiles = self._profiles
-        config = Path(conf["config"]).resolve()
-        if not config.is_file():
-            raise ServiceError(f"the model config {config} is not there")
+        source = Path(conf["config"]).resolve()
+        if not source.is_file():
+            raise ServiceError(f"the model config {source} is not there")
+        config = self._engine_config(source, conf.get("engine"))
         try:
             profile, revision = profiles.load(PROFILE)
         except profiles.ProfileError:
@@ -1087,6 +1133,8 @@ def command_status(args) -> int:
         print(f"Logs       {LOG_DIR}")
         return 0
     print(f"Model      {conf['config']}")
+    if conf.get("engine"):
+        print(f"Engine     {conf['engine']}  (from service.conf; the config's own exe is not used)")
     try:
         data = json.loads(Path(conf["config"]).read_text(encoding="utf-8-sig"))
         if data.get("log"):

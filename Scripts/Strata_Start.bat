@@ -8,6 +8,7 @@ rem    Strata_Start.bat /newest     do not ask: use the newest model config
 rem    Strata_Start.bat /process    start a process of your own instead of switching the service
 rem    Strata_Start.bat /window     start it in its own window and return at once (a process)
 rem    Strata_Start.bat /noopen     do not open the browser
+rem    Strata_Start.bat /nopause    do not wait for a key at the end (service mode: the window closes)
 rem    Strata_Start.bat /restart    stop what is running first, then start it
 rem    Strata_Start.bat /status     say what is running right now, and change nothing
 rem    Strata_Start.bat /keepservice  start a process beside the service (it owns port 8080)
@@ -77,6 +78,7 @@ set "WINDOW="
 set "FOREGROUND="
 set "NOOPEN="
 set "OPEN=--open"
+set "NOPAUSE="
 set "RESTART="
 set "STATUS="
 set "NEWEST="
@@ -95,6 +97,7 @@ if /i "%~1"=="/restart" (set "RESTART=1" & shift & goto parse)
 if /i "%~1"=="/status"  (set "STATUS=1" & shift & goto parse)
 if /i "%~1"=="/newest"  (set "NEWEST=1" & shift & goto parse)
 if /i "%~1"=="/noopen"  (set "NOOPEN=1" & set "OPEN=" & shift & goto parse)
+if /i "%~1"=="/nopause" (set "NOPAUSE=1" & shift & goto parse)
 if /i "%~1"=="/keepservice" (set "KEEPSERVICE=1" & shift & goto parse)
 if /i "%~1"=="/process"  (set "PROCESS=1" & shift & goto parse)
 if /i "%~1"=="/service"  (set "SERVICE=1" & shift & goto parse)
@@ -465,14 +468,19 @@ rem which is the model without --vision (see the DEF block below): vision loads 
 rem engine and a 900 MB projector, VRAM an unattended start does not need, and the models
 rem that keep vision stay selectable. ORDER IS STILL NEWEST-FIRST, so the numbering can
 rem change; the default follows the property rather than the number.
-rem WHAT THE DEFAULT IS comes from Strata_DefaultModel.ps1, not from a number written
-rem here. That script prints the position of the first model without --vision, in the same
-rem newest-first order this script lists. A hardcoded 2 was correct until the config meant
-rem to be 2 was edited - which made it newest, moved it to 1, and pointed the default at a
-rem vision model instead. A position is a fact about the clock; this is a fact about the model.
-set "DEF="
+rem WHAT THE DEFAULT IS comes from Strata_DefaultModel.ps1, which prints the config FILE NAME, not a
+rem position: this list's order is the probe's own, and a position computed elsewhere is a fact about a
+rem list that may be ordered differently. On 23-11 the two disagreed and the default opened the Radeon
+rem config on a PC whose card is an NVIDIA one. The name is looked up in this list, so they cannot disagree.
+set "DEFNAME="
 if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
-  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%"`) do set "DEF=%%A"
+  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%"`) do set "DEFNAME=%%A"
+)
+set "DEF="
+if defined DEFNAME (
+  for /l %%i in (1,1,%NCFG%) do (
+    for %%F in (!CFG%%i!) do if /i "%%~nxF"=="!DEFNAME!" set "DEF=%%i"
+  )
 )
 if not defined DEF set "DEF=1"
 rem The key set is built from NCFG so choice can only accept a number that exists.
@@ -480,7 +488,7 @@ set "KEYS="
 for /l %%i in (1,1,%NCFG%) do set "KEYS=!KEYS!!L%%i!"
 set "DEFKEY=!L%DEF%!"
 set "SEL="
-choice /c !KEYS! /n /t 20 /d !DEFKEY! /m "Start which model? [keys !KEYS:, default !DEFKEY!] "
+choice /c !KEYS! /n /t 20 /d !DEFKEY! /m "Start which model? [keys: !KEYS!; default: !DEFKEY!] "
 set "SEL=!ERRORLEVEL!"
 rem `choice` always answers, so SEL is always set; these lines stay as a guard for an
 rem older probe that emitted no NCFG, and for the Ctrl+C case where choice returns 0.
@@ -532,21 +540,34 @@ rem engine to race and no WinError 10048.  The choice is written to service.conf
 rem model the service brings back after a reboot.
 :serve
 if "%CFG%"=="" goto noconfig
+rem The service may serve on another port than the config names: service.conf's own port= wins,
+rem and it has to (this computer's 8080 belongs to another program). Scripts\Strata_Port.ps1
+rem decides, the same way, for StrataStack.ps1 and the 15-minute check; the address printed
+rem here and the pages that open must agree with it.
+set "SVCPORT="
+set "SVCCONF=%ProgramData%\Strata\service\service.conf"
+if not defined ProgramData set "SVCCONF=C:\ProgramData\Strata\service\service.conf"
+if defined STRATA_SERVICE_ROOT set "SVCCONF=%STRATA_SERVICE_ROOT%\service.conf"
+if exist "%SVCCONF%" for /f "tokens=2 delims==" %%P in ('findstr /b /i "port=" "%SVCCONF%" 2^>nul') do set "SVCPORT=%%P"
+if not defined SVCPORT set "SVCPORT=%PORT%"
 echo.
 echo  Strata - %MODEL%
 echo    folder   %ROOT%
 echo    config   %CFG%
-echo    address  http://127.0.0.1:%PORT%/
+echo    address  http://127.0.0.1:%SVCPORT%/
 echo.
 echo  Switching the Strata service to this model.  It stops the old server, writes the choice to
-echo  service.conf and starts it again; this window waits and then opens the page.
+echo  service.conf and starts it again; this window waits and then opens the pages.
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Service.ps1" -Action Serve -Config "%CFG%"
 set "CODE=%ERRORLEVEL%"
 if not "%CODE%"=="0" echo.
 if not "%CODE%"=="0" echo  The switch ended with code %CODE%.  Scripts\Strata_Service.ps1 -Action
 if not "%CODE%"=="0" echo  Logs, and the service log in ProgramData, say what stopped it.
-if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%PORT%/?open=%RANDOM%#monitor"
+rem Two pages, the way the Desktop shortcut asks for them: the chat, and the monitor beside it.
+if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%"
+if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%#monitor"
+if defined NOPAUSE goto eof
 if defined FOREGROUND goto eof
 pause
 goto eof
@@ -631,6 +652,7 @@ echo    Strata_Start.bat /newest     do not ask: use the newest model config
 echo    Strata_Start.bat /process    start a process of your own instead of switching the service
 echo    Strata_Start.bat /window     start it in its own window and return at once (a process)
 echo    Strata_Start.bat /noopen     do not open the browser
+echo    Strata_Start.bat /nopause    do not wait for a key at the end (service mode: the window closes)
 echo    Strata_Start.bat /restart    stop what is running first, then start it
 echo    Strata_Start.bat /keepservice  start a process beside the service (it owns port 8080)
 echo    Strata_Start.bat /status     say what is running right now, and change nothing

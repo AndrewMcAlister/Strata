@@ -34,6 +34,7 @@ $ErrorActionPreference = 'Continue'
 
 $BATCH_START = 'D:\Strata\Scripts\Strata_Start.bat'
 $BATCH_STOP = 'D:\Strata\Scripts\Strata_Stop.bat'
+$PORT_HELPER = 'D:\Strata\Scripts\Strata_Port.ps1'
 $TASK = 'Strata_EnsureRunning'
 $WORKER = 'SentimentWorker'
 
@@ -47,8 +48,21 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function StrataAnswering {
-    return (@(Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue).Count -gt 0)
+function StrataPort {
+    # One place knows the port (Scripts\Strata_Port.ps1: service.conf, the model config, then 8080):
+    # another program can own 8080 - a llama.cpp service does on this computer - and Strata then
+    # serves on the port its own service.conf names.
+    $port = 0
+    if (Test-Path -LiteralPath $PORT_HELPER) {
+        $text = & powershell -NoProfile -ExecutionPolicy Bypass -File $PORT_HELPER 2>$null
+        if ("$text".Trim() -match '^\d+$') { $port = [int]"$text".Trim() }
+    }
+    if ($port -le 0) { $port = 8080 }
+    return $port
+}
+
+function StrataAnswering([int]$port) {
+    return (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -gt 0)
 }
 
 function WatchdogState {
@@ -58,6 +72,10 @@ function WatchdogState {
 }
 
 function SetWatchdog([bool]$enabled) {
+    # $true: changed. $false: the task exists and could not be changed. 'absent': no task was ever
+    # registered here (the Windows service restarts itself then, so there is nothing to warn about).
+    $task = Get-ScheduledTask -TaskName $TASK -ErrorAction SilentlyContinue
+    if (-not $task) { return 'absent' }
     $flag = if ($enabled) { '/ENABLE' } else { '/DISABLE' }
     & schtasks.exe /Change /TN $TASK $flag *> $null
     return ($LASTEXITCODE -eq 0)
@@ -66,44 +84,56 @@ function SetWatchdog([bool]$enabled) {
 switch ($Action) {
 
     'Status' {
+        $port = StrataPort
         $worker = Get-Service -Name $WORKER -ErrorAction SilentlyContinue
         Say ("  {0,-16} {1}" -f 'SentimentWorker', $(if ($worker) { $worker.Status } else { 'not installed' }))
-        Say ("  {0,-16} {1}" -f 'Strata', $(if (StrataAnswering) { 'answering on 8080' } else { 'not answering on 8080' }))
+        Say ("  {0,-16} {1}" -f 'Strata', $(if (StrataAnswering $port) { "answering on $port" } else { "not answering on $port" }))
         Say ("  {0,-16} {1}" -f 'watchdog task', (WatchdogState))
         exit 0
     }
 
     'Start' {
-        if (-not (SetWatchdog $true)) { Say ("watchdog: could not be enabled (task '{0}')" -f $TASK) 'Yellow' }
+        $port = StrataPort
+        if ((SetWatchdog $true) -eq $false) { Say ("watchdog: could not be enabled (task '{0}')" -f $TASK) 'Yellow' }
 
-        # The stop happens HERE, not through the batch's /restart. Strata_Start.bat treats a
-        # running server as "this is the model you meant" and /restart reloads that same config -
-        # it never asks which model. Stopping first means the batch starts with nothing running,
-        # so it offers the menu again. That is the whole point: one click to change model.
-        if (StrataAnswering) {
+        # The stop happens HERE in process mode, not through the batch's /restart. Strata_Start.bat
+        # treats a running server as "this is the model you meant" and /restart reloads that same
+        # config - it never asks which model. Stopping first means the batch starts with nothing
+        # running, so it offers the menu again. That is the whole point: one click to change model.
+        #
+        # With the Windows service installed there is nothing to stop here: the batch switches the
+        # service (Strata_Service.ps1 -Action Serve stops it, writes the choice and starts it again),
+        # and a stop first would only add a second Administrator prompt to the click.
+        $serviceInstalled = @(Get-Service -Name 'Strata' -ErrorAction SilentlyContinue).Count -gt 0
+        if (-not $serviceInstalled -and (StrataAnswering $port)) {
             Say 'stopping the running model first...' 'Cyan'
             & cmd.exe /c "$BATCH_STOP /quiet" | Out-Null
             Start-Sleep -Seconds 2
         }
 
         if ($Model) {
-            $runArgs = @('--config', $Model, '/noopen')
+            $runArgs = @('--config', $Model, '/noopen', '/nopause')
             Say ("starting {0}" -f (Split-Path $Model -Leaf)) 'Cyan'
         }
         else {
-            $runArgs = @()
+            # /nopause: in service mode the batch hands the model to the service and returns, so this
+            # window has nothing left to watch and closes once the pages have opened. (/fg would ask
+            # for a process of the batch's own instead of the service - not what the shortcut wants.)
+            $runArgs = @('/nopause')
             Say 'asking which model to start' 'Cyan'
         }
 
-        # Runs in THIS console: the window stays for as long as the model does, and closing it
-        # stops the model.
+        # Runs in THIS console: with the service installed the model is the service's, and the
+        # window closes when the menu is answered. Without it the server lives in this window,
+        # and closing the window stops it.
         & cmd.exe /c ("$BATCH_START " + ($runArgs -join ' '))
         exit $LASTEXITCODE
     }
 
     'Stop' {
-        if (-not (SetWatchdog $false)) { Say ("watchdog: could not be disabled (task '{0}')" -f $TASK) 'Yellow' }
-        else { Say 'watchdog: disabled, so it will not start Strata again' }
+        $watchdog = SetWatchdog $false
+        if ($watchdog -eq $false) { Say ("watchdog: could not be disabled (task '{0}')" -f $TASK) 'Yellow' }
+        elseif ($watchdog -eq $true) { Say 'watchdog: disabled, so it will not start Strata again' }
 
         Say 'stopping Strata (service or console server, whichever is running)...' 'Cyan'
         & cmd.exe /c "$BATCH_STOP /quiet"

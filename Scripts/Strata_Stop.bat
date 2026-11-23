@@ -345,10 +345,18 @@ rem Its processes cannot be seen from here (they are SYSTEM's), so a stop goes t
 rem Administrator rights, asked for the same way Scripts\Strata_Service.ps1 asks: the start of the elevated
 rem python, with the result of the stop as this script's exit code.
 :service_running
+rem The address is the port the service serves on, not the model config's: service.conf's port= wins
+rem (this PC's 8080 belongs to another program), the same rule as Strata_Start.bat and Strata_Port.ps1.
+set "SVCPORT="
+set "SVCCONF=%ProgramData%\Strata\service\service.conf"
+if not defined ProgramData set "SVCCONF=C:\ProgramData\Strata\service\service.conf"
+if defined STRATA_SERVICE_ROOT set "SVCCONF=%STRATA_SERVICE_ROOT%\service.conf"
+if exist "%SVCCONF%" for /f "tokens=2 delims==" %%P in ('findstr /b /i "port=" "%SVCCONF%" 2^>nul') do set "SVCPORT=%%P"
+if not defined SVCPORT set "SVCPORT=8080"
 if /i "%MODE%"=="status" (
     echo.
     echo  Strata is running as the Windows service "%SVCN%".
-    echo    address  http://127.0.0.1:8080/
+    echo    address  http://127.0.0.1:%SVCPORT%/
     echo.
     echo  Strata_Stop.bat stops it; Administrator rights are asked for then.
     echo.

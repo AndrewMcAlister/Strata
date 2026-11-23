@@ -1,26 +1,37 @@
 <#
     Which model an unattended start should choose.
 
-    THE TUNED 94K CONFIG IS THE DEFAULT. It is the configuration this machine was
-    tuned for: the 40 GiB pinned expert budget, the adaptive RAM tier that follows
-    the conversation, and the expert profile learned from real work. An unattended
-    start - the task at logon - is the one case where nobody has chosen anything,
-    so it gets the model the day-to-day work actually runs on rather than the
-    cheapest one installed.
+    THE TUNED 94K CONFIG IS THE DEFAULT on the PC that has it. It is the configuration this
+    machine was tuned for: the 40 GiB pinned expert budget, the adaptive RAM tier that follows
+    the conversation, and the expert profile learned from real work. An unattended start - the
+    task at logon - is the one case where nobody has chosen anything, so it gets the model the
+    day-to-day work actually runs on rather than the cheapest one installed.
+
+    WHAT THIS PC SERVES COMES FIRST. service.conf names the model the Windows service serves, and
+    that file is per computer (ProgramData), so a folder of configs shared by two PCs can serve the
+    94K Q4 on one and the 20K IQ2_XS on the other - the one whose model files and card are there.
+    When the service is not installed, or names a config that is no longer a row in this list, the
+    named default below is used, then the first model without vision, then the first.
 
     Chosen by name, not by position. The list Strata_Start.bat shows is ordered by file
     write time, so editing any config reorders it: a hardcoded "2" was correct until the
     config meant to be 2 was edited, which made it newest, moved it to 1, and pointed the
     default at a vision model instead. See DEFAULT_MODEL below to change it.
 
-    Falls back to the first model without vision, then to 1, so a missing or renamed
-    config still yields a usable position rather than an error.
+    WHAT IT PRINTS is the config FILE NAME (strata-iq2_xs-20k.json), not a position in the
+    list. Strata_Start.bat builds its own list and finds the name in it, so the menu's order
+    and this answer cannot disagree - a position did, on 23-11: the batch listed the configs
+    in a different order and the default opened the Radeon config on a NVIDIA PC.
+
+    Falls back to the first model in the list, then to the first without vision. Prints
+    nothing when the folder holds no config, and the batch uses its first entry.
 #>
 param([string]$Root = 'D:\Strata')
 
 # The default model, by model_name. One line to change.
-# It names the config the Windows service serves (strata-q4_k_xl_dflash2_94k_novision.json), so an unattended start and
-# the service pick the same model instead of loading two different ones into the same 62 GB of RAM.
+# It names the config the Windows service serves on the tuned PC (strata-q4_k_xl_dflash2_94k_novision.json),
+# so an unattended start and the service pick the same model instead of loading two different ones into the
+# same RAM. A PC whose service.conf names another config uses that one instead (see above).
 $DEFAULT_MODEL = 'qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision'
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -41,23 +52,41 @@ foreach ($file in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' |
     $rows += [pscustomobject]@{
         Position = $position
         Name     = [string]$config.model_name
+        Config   = [string]$file.Name
         Vision   = ($args -contains '--vision')
+    }
+}
+
+# 0. what this PC's Windows service serves: service.conf is per computer, so this is the model whose
+#    files and card are here (the shared configs themselves never have to change between the two PCs).
+$confPath = if ($env:STRATA_SERVICE_ROOT) { Join-Path $env:STRATA_SERVICE_ROOT 'service.conf' }
+            elseif ($env:ProgramData) { Join-Path $env:ProgramData 'Strata\service\service.conf' }
+            else { 'C:\ProgramData\Strata\service\service.conf' }
+if (Test-Path -LiteralPath $confPath) {
+    $served = ''
+    foreach ($line in Get-Content -LiteralPath $confPath) {
+        if ($line -match '^\s*config\s*=\s*(.+?)\s*$') { $served = $matches[1].Trim('"').Trim("'") }
+    }
+    if ($served) {
+        $leaf = Split-Path $served -Leaf
+        $served_row = $rows | Where-Object { $_.Config -eq $leaf } | Select-Object -First 1
+        if ($served_row) { Write-Output $served_row.Config; exit 0 }
     }
 }
 
 # 1. the named default, when set
 if ($DEFAULT_MODEL -ne '') {
     $hit = $rows | Where-Object { $_.Name -eq $DEFAULT_MODEL } | Select-Object -First 1
-    if ($hit) { Write-Output $hit.Position; exit 0 }
+    if ($hit) { Write-Output $hit.Config; exit 0 }
 }
 
-# 2. position 1 - the first model in the list, which is newest first with the filename as a
-#    tie-break so it cannot depend on which of two second-apart writes finished last
-if ($rows.Count -gt 0) { Write-Output $rows[0].Position; exit 0 }
+# 2. the first model in the list: newest first, the filename as the tie-break so it cannot
+#    depend on which of two second-apart writes finished last
+if ($rows.Count -gt 0) { Write-Output $rows[0].Config; exit 0 }
 
-# 2. otherwise the first without vision - still the cheaper of what is installed
+# 3. otherwise the first without vision - still the cheaper of what is installed
 $noVision = $rows | Where-Object { -not $_.Vision } | Select-Object -First 1
-if ($noVision) { Write-Output $noVision.Position; exit 0 }
+if ($noVision) { Write-Output $noVision.Config; exit 0 }
 
-# 3. otherwise the first
-Write-Output 1
+# 4. nothing installed: print nothing, and the batch uses its first entry
+exit 0

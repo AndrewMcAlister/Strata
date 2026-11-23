@@ -305,6 +305,79 @@ class WindowsAmd(unittest.TestCase):
                 self.assertIn(device, ec.WIN_AMD_IGPU_IDS)
 
 
+class LargestDedicatedVram(unittest.TestCase):
+    """A PC with more than one card starts the engine of the card with the most dedicated memory: that is the GPU the
+    model fits on. A tie, and a card that reports no size, keep the make order (NVIDIA, AMD, Intel)."""
+
+    GEFORCE_16 = {"vendor": "10de", "device": 0x2F04, "name": "NVIDIA GeForce RTX 5070 Ti", "vram_gb": 16.0}
+    RADEON_24 = {"vendor": "1002", "device": 0x744C, "name": "AMD Radeon RX 7900 XTX", "vram_gb": 24.0}
+
+    def test_the_bigger_radeon_decides_even_beside_a_geforce(self):
+        adapters = [dict(self.GEFORCE_16), dict(self.RADEON_24)]
+        self.assertEqual(ec._windows_vendor_backend(adapters), "hip")
+
+    def test_the_bigger_geforce_decides_even_beside_a_radeon(self):
+        adapters = [dict(self.RADEON_24, vram_gb=16.0), dict(self.GEFORCE_16, vram_gb=24.0)]
+        self.assertEqual(ec._windows_vendor_backend(adapters), "cuda")
+
+    def test_detect_backend_follows_the_largest_card(self):
+        adapters = [dict(self.GEFORCE_16), dict(self.RADEON_24)]
+        with mock.patch.object(ec, "windows_display_adapters", return_value=adapters), \
+                mock.patch.object(ec, "host_platform", return_value="windows-x86_64"), \
+                mock.patch.object(ec, "saved_backend", return_value=None):
+            self.assertEqual(ec.detect_backend({}), ("hip", "display adapters"))
+
+    def test_dedicated_memory_decides_not_a_shared_pool(self):
+        # an Intel integrated GPU reports its small carve-out; a Radeon card keeps its own memory
+        adapters = [{"vendor": "8086", "device": 0x4680, "name": "Intel(R) UHD Graphics 770", "vram_gb": 0.128},
+                    {"vendor": "1002", "device": 0x73BF, "name": "AMD Radeon RX 6800", "vram_gb": 16.0}]
+        self.assertEqual(ec._windows_vendor_backend(adapters), "hip")
+
+    def test_a_card_that_reports_no_size_loses_to_one_that_does(self):
+        quiet = dict(self.GEFORCE_16, vram_gb=0.0)
+        self.assertEqual(ec._windows_vendor_backend([quiet, dict(self.RADEON_24)]), "hip")
+
+    def test_equal_sizes_keep_the_make_order(self):
+        ge = dict(self.GEFORCE_16, vram_gb=16.0)
+        radeon = dict(self.RADEON_24, vram_gb=16.0)
+        self.assertEqual(ec._windows_vendor_backend([radeon, ge]), "cuda")
+        self.assertEqual(ec._windows_vendor_backend([ge, radeon]), "cuda")
+
+    def test_an_integrated_radeon_beside_a_card_does_not_decide(self):
+        adapters = [{"vendor": "1002", "device": 0x164E, "name": "AMD Radeon(TM) Graphics", "vram_gb": 0.5},
+                    dict(self.GEFORCE_16)]
+        self.assertEqual(ec._windows_vendor_backend(adapters), "cuda")
+
+
+class LargestDedicatedVramLinux(unittest.TestCase):
+    """The same rule from sysfs, where `mem_info_vram_total` is the card's dedicated memory."""
+
+    @staticmethod
+    def _cards(root: str, cards: list[tuple[str, int | None]]) -> str:
+        for index, (vendor, total) in enumerate(cards):
+            device = Path(root) / f"card{index}" / "device"
+            device.mkdir(parents=True)
+            (device / "vendor").write_text(vendor + "\n")
+            if total is not None:
+                (device / "mem_info_vram_total").write_text(str(total) + "\n")
+        return root
+
+    def test_the_card_with_more_vram_decides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ec._drm_vendor_backend(self._cards(tmp, [("0x10de", 16 * 2 ** 30), ("0x1002", 24 * 2 ** 30)])), "hip")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ec._drm_vendor_backend(self._cards(tmp, [("0x10de", 24 * 2 ** 30), ("0x1002", 16 * 2 ** 30)])), "cuda")
+
+    def test_an_integrated_radeon_does_not_decide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = [("0x1002", 512 * 2 ** 20), ("0x8086", 16 * 2 ** 30)]
+            self.assertEqual(ec._drm_vendor_backend(self._cards(tmp, cards)), "sycl")
+
+    def test_an_unknown_size_keeps_the_make_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ec._drm_vendor_backend(self._cards(tmp, [("0x1002", None), ("0x10de", None)])), "cuda")
+
+
 @unittest.skipIf(NO_HIP, "there is no HIP engine for arm64 Linux (BACKEND_MATRIX): this test builds one for the host platform")
 class WrongCardFamily(unittest.TestCase):
     """A tester build is for one AMD card family; on another family the person gets one plain line, not a technical list."""
