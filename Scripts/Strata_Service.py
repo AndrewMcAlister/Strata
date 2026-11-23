@@ -29,6 +29,8 @@ Commands (normally through Scripts\\Strata_Service.ps1, which asks for elevation
     install [--config PATH] [--no-start] [--force]
     uninstall [--purge]
     start | stop | restart | status | logs
+    serve --config PATH      stop the service, serve another model, start it again,
+                             and wait until that model answers (exit code 6: it did not)
     run                      started by the Service Control Manager only
 """
 
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import http.client
 import json
 import os
 import shutil
@@ -637,6 +640,14 @@ def _tail(path: Path, lines: int = 20, limit: int = 16384) -> list[str]:
     return data.decode("utf-8", "replace").splitlines()[-lines:]
 
 
+def _newest_service_log() -> Path | None:
+    try:
+        logs = sorted(LOG_DIR.glob("service-*.log"), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+    return logs[-1] if logs else None
+
+
 def decide(state: str) -> str:
     """What the watchdog does next for one runtime state.
 
@@ -943,7 +954,8 @@ def prepare_environment() -> None:
 
 # ------------------------------------------------------------------------------------------------ commands
 
-def _health_url(conf: dict) -> str:
+def _endpoint(conf: dict) -> tuple[str, int]:
+    """The host and port the service serves on: service.conf's own, then the config's, then 8080."""
     host = conf.get("host") or "127.0.0.1"
     if host in ("0.0.0.0", "::", "*"):
         host = "127.0.0.1"
@@ -954,7 +966,12 @@ def _health_url(conf: dict) -> str:
             port = data.get("port") if isinstance(data.get("port"), int) else None
         except (OSError, ValueError):
             port = None
-    return f"http://{host}:{port or 8080}/health"
+    return host, int(port or 8080)
+
+
+def _health_url(conf: dict) -> str:
+    host, port = _endpoint(conf)
+    return f"http://{host}:{port}/health"
 
 
 def wait_healthy(conf: dict, seconds: float) -> dict | None:
@@ -969,6 +986,116 @@ def wait_healthy(conf: dict, seconds: float) -> dict | None:
             pass
         time.sleep(1)
     return None
+
+
+def _probe_key(config: Path) -> str | None:
+    """The first API key the server will accept, or None when it serves without one.
+
+    Read the way the server reads it: ``STRATA_API_KEY`` first, then the run config's
+    ``api_key``; ``none`` means "served without a key on purpose".
+    """
+    raw = os.environ.get("STRATA_API_KEY")
+    if not raw:
+        try:
+            data = json.loads(config.read_text(encoding="utf-8-sig"))
+            raw = data.get("api_key") if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            raw = None
+    text = str(raw or "").strip()
+    if not text or text.lower() == "none":
+        return None
+    return text.replace(",", " ").split()[0]
+
+
+def _ask_the_model(conf: dict, seconds: float) -> tuple[str, str]:
+    """One one-token chat request: the first thing the web page asks the server.
+
+    ``/health`` answers as soon as the server is up, before a prompt has run, so it cannot
+    tell a model that answers from one that loads and then fails its first prompt - an engine
+    kernel that does not run on this card did exactly that on 2026-11-24, and the page opened
+    for it could not chat. A 409/429/503 (busy, still starting) or a closed socket says "ask
+    again"; any other answer says this model is not going to serve that page.
+
+    Returns ``(verdict, detail)``: ``ready``, ``retry`` or ``failed``.
+    """
+    host, port = _endpoint(conf)
+    source = Path(conf["config"])
+    model = "strata"
+    try:
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
+        if isinstance(data, dict) and data.get("model_name"):
+            model = str(data["model_name"])
+    except (OSError, ValueError):
+        pass
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}],
+                       "max_tokens": 1, "temperature": 0, "stream": False}).encode()
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    key = _probe_key(source)
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    connection = http.client.HTTPConnection(host, port, timeout=max(0.5, seconds))
+    try:
+        connection.request("POST", "/v1/chat/completions", body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read(65536)
+        if response.status == 200:
+            return "ready", ""
+        detail = raw.decode("utf-8", "replace").strip()
+        try:
+            error = json.loads(detail).get("error")
+            if isinstance(error, dict):
+                error = error.get("message")
+            if isinstance(error, str) and error:
+                detail = error
+        except (ValueError, AttributeError):
+            pass
+        if response.status in (409, 429, 503):
+            return "retry", f"the server answered HTTP {response.status}"
+        if response.status in (401, 403):
+            # Not the model's fault: this check did not sign in. Say so, and never call a
+            # service broken because the probe had no accepted key.
+            return "retry", (f"the server answered HTTP {response.status}, so this check could not "
+                             f"sign in (set STRATA_API_KEY if the service uses one)")
+        return "failed", f"the server answered HTTP {response.status}: {detail[:400]}"
+    except (OSError, http.client.HTTPException) as exc:
+        return "retry", f"nothing answered yet ({exc.__class__.__name__})"
+    finally:
+        connection.close()
+
+
+def _health_ok(conf: dict, seconds: float) -> bool:
+    """Is the server up at all? Cheap, and unauthenticated, so it is asked before a chat request."""
+    try:
+        with urllib.request.urlopen(_health_url(conf), timeout=max(0.5, seconds)) as response:
+            return response.status == 200
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+
+
+def wait_until_the_model_answers(conf: dict, seconds: float) -> tuple[bool, str]:
+    """Poll one chat request until the model answers, the wait is over, or it cannot serve.
+
+    Returns ``(True, "")`` when the model answered, ``(False, why)`` otherwise. ``/health`` is
+    asked first so that a model still reading its weights is not sent a chat request every two
+    seconds. A "cannot" answer ends the wait at once: a model that fails its first prompt fails
+    the next one too, and making the person wait out the whole timeout for the same error helps
+    nobody.
+    """
+    deadline = time.monotonic() + max(1, seconds)
+    why = "nothing answered yet"
+    while time.monotonic() < deadline:
+        if not _health_ok(conf, min(5.0, deadline - time.monotonic())):
+            why = "the server is not up yet"
+            time.sleep(2)
+            continue
+        verdict, detail = _ask_the_model(conf, max(1.0, min(10.0, deadline - time.monotonic())))
+        if verdict == "ready":
+            return True, ""
+        if verdict == "failed":
+            return False, detail
+        why = detail
+        time.sleep(2)
+    return False, f"no answer within {int(seconds)} seconds ({why})"
 
 
 def command_install(args) -> int:
@@ -1094,13 +1221,20 @@ def command_restart(args) -> int:
 
 
 def command_serve(args) -> int:
-    """Serve another run config from the same service: rewrite ``config=`` and restart.
+    """Serve another run config from the same service: stop it, rewrite ``config=``, start it again.
 
     This is the model switch. It keeps one owner of the port: a shortcut that stopped the
     service and started a second process had to race the previous engine for memory and for
     8080, and lost that race with ``WinError 10048`` when it did not wait long enough.
+
+    It returns only when the chosen model has answered a chat request, because the pages the
+    caller opens next point at this model: a page opened while the model is still loading, or
+    after it failed, cannot work. A model that does not answer is exit code 6, with the end of
+    the service log, so the caller has something to show instead of a blank page.
     """
     require_windows()
+    if not 1 <= args.start_wait <= 1800:
+        raise ServiceError("--start-wait must be 1..1800 seconds", 2)
     config = Path(args.config).expanduser()
     if not config.is_absolute():
         config = (ROOT / config)
@@ -1116,7 +1250,26 @@ def command_serve(args) -> int:
     grant_user_write(CONF_PATH)
     print(f"Serving {config}")
     print(f"Wrote   {CONF_PATH}")
-    return command_restart(args)
+    print("Stopping the service, then starting it again with this model ...")
+    code = command_restart(args)
+    if code != 0:
+        return code
+    conf = load_conf(CONF_PATH)
+    host, port = _endpoint(conf)
+    print(f"Waiting up to {int(args.start_wait)} s for http://{host}:{port}/ to answer ...")
+    answered, detail = wait_until_the_model_answers(conf, args.start_wait)
+    if not answered:
+        print(f"strata service: '{args.name}' restarted, but the chosen model is not serving: {detail}",
+              file=sys.stderr)
+        newest = _newest_service_log()
+        where = f" The end of {newest}:" if newest is not None else " There is no service log yet."
+        print("strata service: nothing was opened." + where, file=sys.stderr)
+        if newest is not None:
+            for line in _tail(newest, lines=20):
+                print("  " + line, file=sys.stderr)
+        return 6
+    print(f"Service '{args.name}' is serving {config} at http://{host}:{port}/")
+    return 0
 
 
 def command_status(args) -> int:
@@ -1204,6 +1357,8 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", metavar="PATH", required=True,
                        help="the run config to serve, for example strata-iq3_xxs.json")
     serve.add_argument("--name", default=SERVICE_NAME)
+    serve.add_argument("--start-wait", type=float, default=300,
+                       help="seconds to wait for the chosen model to answer (default 300)")
     run = sub.add_parser("run", help="the Service Control Manager entry point")
     run.add_argument("--name", default=SERVICE_NAME)
     return ap

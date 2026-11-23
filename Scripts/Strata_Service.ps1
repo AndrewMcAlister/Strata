@@ -20,8 +20,9 @@
 #   Start      start the service. The model loads in the background.
 #   Stop       stop the service; the server is asked to drain first.
 #   Restart    Stop, then Start. Use this after editing service.conf.
-#   Serve      point service.conf at another model config and restart, so switching
-#              models keeps the service and the port (-Config PATH).
+#   Serve      point service.conf at another model config, restart, and wait until that
+#              model answers one chat request, so switching models keeps the service and
+#              the port (-Config PATH). Exit code 6: it did not answer; the log says why.
 #   Status     say what the service and the model are doing.
 #   Logs       show the end of the newest service log (-Tail N).
 #   Edit       open service.conf in Notepad to change the model, the port or the engine.

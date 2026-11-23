@@ -46,11 +46,13 @@ rem  MODEL CHOICES - the run configs in D:\Strata, newest first, which is the or
 rem  The menu keys are LETTERS: a is the first line, b the second, and so on.
 rem
 rem    key  model                                                context    drafter  vision  quant     config
-rem    a    qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision      94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (coding, the default)
+rem    a    qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision      94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (the default)
 rem    b    qwen3.8-flash-next-iq2_xs (20k)                      20,480     mtp      no      IQ2_XS    strata-iq2_xs-20k.json                     (smallest, fastest)
-rem    c    qwen3.8-flash-next-iq3_xxs-dflash2 (94k)             94,208     dflash2  no      IQ3_XXS   strata-iq3_xxs-dflash2.json                (chat)
-rem    d    qwen3.8-flash-next-q4_k_xl_dflash2_143k              143,360     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_143k.json
-rem    e    qwen3.8-flash-next-q4_k_xl_dflash2_94k               94,208     dflash2  yes     Q4_K_XL   strata-q4_k_xl_dflash2_94k.json
+rem
+rem  NOT OFFERED: strata-*mi50*.json.  Those are the Radeon (gfx906) hand build's configs: their
+rem  "exe" is D:\Strata\build-906-win\strata.exe and their "backend" is "hip", and this PC's engine
+rem  is the CUDA component, so they cannot load here.  The files stay in the folder for the Radeon
+rem  PC; the probe's IsHidden test leaves them out of this menu and out of the default.
 rem
 rem  One drafter at a time: dflash2 (a block drafter, ~1.2 GB of VRAM, its configs reserve
 rem  1280 MiB) or the MTP layer. b still runs the MTP layer.
@@ -198,6 +200,14 @@ rem the one that carries the engine path and its arguments.
 >>"%PSFILE%" echo     if (-not $j.args) { return $false }
 >>"%PSFILE%" echo     return $true
 >>"%PSFILE%" echo }
+rem NOT OFFERED in this PC's menu: the Radeon (gfx906) hand build's configs, strata-*mi50*.json
+rem (strata-iq2_xs-20k-mi50.json and strata-q4_k_xl_dflash2_94k_mi50.json). Their "exe" is
+rem D:\Strata\build-906-win\strata.exe and their "backend" is "hip"; this PC's engine is the CUDA
+rem component, so they cannot load here. The files stay in the folder for the Radeon PC.
+>>"%PSFILE%" echo function IsHidden($path) {
+>>"%PSFILE%" echo     if ($path -eq '') { return $false }
+>>"%PSFILE%" echo     return ($path -like '*mi50*.json')
+>>"%PSFILE%" echo }
 >>"%PSFILE%" echo $all = @(Get-CimInstance Win32_Process)
 >>"%PSFILE%" echo $server = $null
 >>"%PSFILE%" echo $engines = New-Object System.Collections.ArrayList
@@ -271,6 +281,7 @@ rem and the same IsConfig test as before) so the start can offer it; the newest 
 >>"%PSFILE%" echo if ($cfg -eq '') {
 >>"%PSFILE%" echo     foreach ($f in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
 >>"%PSFILE%" echo         if (-not (IsConfig $f.FullName)) { continue }
+>>"%PSFILE%" echo         if (IsHidden $f.FullName) { continue }
 >>"%PSFILE%" echo         [void]$configs.Add($f)
 >>"%PSFILE%" echo         if (($newest -eq $null) -or ($f.LastWriteTime -gt $newest.LastWriteTime)) { $newest = $f }
 >>"%PSFILE%" echo     }
@@ -555,17 +566,31 @@ echo    folder   %ROOT%
 echo    config   %CFG%
 echo    address  http://127.0.0.1:%SVCPORT%/
 echo.
-echo  Switching the Strata service to this model.  It stops the old server, writes the choice to
-echo  service.conf and starts it again; this window waits and then opens the pages.
+echo  Stopping the Strata service and starting it again with this model.  The choice is
+echo  written to service.conf; this window waits until the model answers and then opens
+echo  the pages.  The first load takes a minute or two.
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Service.ps1" -Action Serve -Config "%CFG%"
 set "CODE=%ERRORLEVEL%"
-if not "%CODE%"=="0" echo.
-if not "%CODE%"=="0" echo  The switch ended with code %CODE%.  Scripts\Strata_Service.ps1 -Action
-if not "%CODE%"=="0" echo  Logs, and the service log in ProgramData, say what stopped it.
+if "%CODE%"=="0" goto serveopen
+rem The pages are not opened for a model that did not answer: an address that cannot talk is
+rem worse than the reason it cannot.  The end of the service log says why (the engine's own
+rem error is in there), and a person at the console gets to read it before the window goes.
+echo.
+echo  The Strata service did not come back with this model (code %CODE%), so nothing was opened.
+echo  The end of the service log:
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Service.ps1" -Action Logs -Tail 20
+if not defined NOPAUSE goto servehold
+if "%TTY%"=="1" goto servehold
+goto eof
+:servehold
+pause
+goto eof
+:serveopen
 rem Two pages, the way the Desktop shortcut asks for them: the chat, and the monitor beside it.
-if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%"
-if "%CODE%"=="0" if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%#monitor"
+if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%"
+if not "%OPEN%"=="" start "" "http://127.0.0.1:%SVCPORT%/?open=%RANDOM%#monitor"
 if defined NOPAUSE goto eof
 if defined FOREGROUND goto eof
 pause
@@ -667,6 +692,11 @@ echo  a start lists them and asks which to load; pressing Enter takes the first,
 echo  newest.  /newest skips the question, and so does a --config of your own, a server that is
 echo  already running, and any start whose input is not a console (a scheduled task, a redirect).
 echo  Nothing is asked when only one model is installed.
+echo.
+echo  When the service is installed, choosing a model stops the service and starts it again
+echo  with that model.  This window then waits until the model answers, and only then opens
+echo  the pages; a model that does not answer opens nothing and the end of the service log
+echo  is shown instead.
 echo.
 echo  The Chat settings saved beside a config (strata-MODEL.shared-settings.json) are not a
 echo  config and are ignored, as is any file without an engine path and arguments in it.

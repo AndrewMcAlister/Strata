@@ -23,6 +23,10 @@
     and this answer cannot disagree - a position did, on 23-11: the batch listed the configs
     in a different order and the default opened the Radeon config on a NVIDIA PC.
 
+    THE RADEON (gfx906) CONFIGS ARE NOT A CHOICE HERE, as in the menu: strata-*mi50*.json names
+    D:\Strata\build-906-win\strata.exe and "backend": "hip", and this PC's engine is the CUDA
+    component. They stay in the folder for the Radeon PC and are skipped below.
+
     Falls back to the first model in the list, then to the first without vision. Prints
     nothing when the folder holds no config, and the batch uses its first entry.
 #>
@@ -41,6 +45,9 @@ $position = 0
 foreach ($file in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' |
                     Sort-Object @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$false})) {
     if ($file.Name -like '*.shared-settings.json') { continue }
+    # The Radeon (gfx906) hand build's configs: not a choice on this PC (see the note above).
+    # Both names end in mi50.json (one -mi50, one _mi50).
+    if ($file.Name -like '*mi50*.json') { continue }
     $config = $null
     try { $config = ConvertFrom-Json (Get-Content -Raw -LiteralPath $file.FullName) } catch { continue }
     if ($config -eq $null) { continue }
