@@ -1492,11 +1492,33 @@ function loadDrawer(s = settings) {
 }
 // "Use for other apps too": the server keeps these settings as every client's defaults (GET/POST /settings)
 let sharedOn = false;
+// The server also keeps THIS page's settings ({"panel"}), so a new session, a new day or a cleared
+// browser starts where the last Apply ended instead of at DEFAULTS. The two are separate: "shared"
+// is what other apps get, "panel" is this page's own state. chatList/chatEdit are deliberately left
+// out - chats-ui.js owns those, and repainting them here would desync the list.
+function panelFields(s) {
+  return {thinking: s.thinking, temperature: +s.temperature, top_p: +s.top_p, top_k: +s.top_k,
+          max: s.max || "", seed: s.seed || "", math: !!s.math, show: !!s.show, esp: s.esp !== false,
+          mcp: s.mcp !== false, whileBusy: s.whileBusy || "wait"};
+}
+async function savePanel(s) {
+  try {
+    await fetch("settings", {method: "POST", headers: headers(true), body: JSON.stringify({panel: panelFields(s)})});
+  } catch (e) { /* the settings still hold for this page; the server copy is the convenience */ }
+}
 async function loadShared() {
   try {
     const r = await fetch("settings", {headers: headers()});
-    if (r.ok) sharedOn = !!(await r.json()).shared;
-  } catch (e) { /* an older server: the switch just stays off */ }
+    if (r.ok) {
+      const body = await r.json();
+      sharedOn = !!body.shared;
+      const saved = body.panel;
+      if (saved && typeof saved === "object" && Object.keys(saved).length) {
+        settings = {...settings, ...saved};      // the last Apply, from any session: it outranks this browser's copy
+        loadDrawer(settings);
+      }
+    }
+  } catch (e) { /* an older server: the switch just stays off, and this page keeps its own settings */ }
   $("s-share").setAttribute("aria-checked", String(sharedOn));
 }
 function sharedDefaults(s) {
@@ -1554,6 +1576,7 @@ $("s-apply").onclick = async () => {
               chatList: locked ? !!prev.chatList : checked("s-list"), chatEdit: locked ? !!prev.chatEdit : checked("s-edit"),
               whileBusy: segValue("s-busy") || "wait"};
   store.set("sampling", settings);
+  void savePanel(settings);                            // and the server keeps them for the next session
   StrataMath.reset();                                  // math on or off: every answer is drawn again
   if (settings.chatList !== !!prev.chatList) await setChatList(settings.chatList, true);
   if (settings.chatEdit !== !!prev.chatEdit) { clearUndo(); syncActions(); }
@@ -1662,3 +1685,8 @@ $("img-form").onsubmit = async (ev) => {
     paintLive();
   }
 };
+
+// The server keeps this page's Chat settings (POST /settings {"panel"}): read them back at start,
+// so a new session or a new day begins where the last Apply ended instead of at DEFAULTS. The
+// drawer does the same on open, in case another tab saved a change since this page loaded.
+loadShared();

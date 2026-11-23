@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "Scripts"))
 
 import Strata_Service as svc                                  # noqa: E402
+import starting_flag                                          # noqa: E402
 
 WINDOWS = os.name == "nt"
 
@@ -271,3 +272,116 @@ def test_run_outside_the_service_manager_says_so(monkeypatch):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+# ------------------------------------------------------------------------------ the starting flag
+
+def test_the_flag_can_only_be_released_by_the_process_that_took_it(tmp_path):
+    """A stop path must not delete another starter's flag: that would let a second model load."""
+    flag = tmp_path / "strata.starting"
+    flag.write_text(json.dumps({"pid": os.getpid() + 1, "owner": "another starter"}),
+                    encoding="utf-8")
+    assert starting_flag.release_own(flag) is False
+    assert flag.exists()
+    assert starting_flag.is_fresh(flag)
+    taken, _ = starting_flag.acquire("this test", flag)
+    assert taken is False, "a fresh flag from another pid still blocks a start"
+
+
+def test_the_service_can_release_the_flag_after_a_failed_start(tmp_path):
+    flag = tmp_path / "strata.starting"
+    taken, _ = starting_flag.acquire("this test", flag)
+    assert taken
+    assert starting_flag.release_own(flag) is True
+    assert not flag.exists()
+    assert starting_flag.release_own(flag) is False
+
+
+def test_the_service_releases_its_own_flag_before_acquiring_again():
+    """An asynchronous failed start leaves the flag; without this the service refuses itself."""
+    source = (ROOT / "Scripts" / "Strata_Service.py").read_text(encoding="utf-8")
+    assert "starting_flag.release()" not in source
+    assert source.count("starting_flag.release_own()") >= 4
+    assert source.index("starting_flag.release_own()") < source.index("starting_flag.acquire("), \
+        "the retry releases its own flag before it asks for it again"
+
+
+@pytest.mark.skipif(not WINDOWS, reason="the service loop is Windows only")
+def test_a_failed_start_releases_the_flag_so_the_next_retry_can_start(monkeypatch, tmp_path):
+    """The failure is asynchronous: _runtime.start returns, then status() says failed. The flag
+    is still the service's own, so an unconditional retry would be refused for five minutes."""
+
+    class FakeFlag:
+        def __init__(self):
+            self.held = False
+            self.releases = 0
+
+        def acquire(self, owner):
+            if self.held:
+                return False, "this service still holds the flag"
+            self.held = True
+            return True, "taken"
+
+        def release_own(self):
+            self.releases += 1
+            if not self.held:
+                return False
+            self.held = False
+            return True
+
+    class FakeRuntime:
+        def __init__(self):
+            self.states = ["stopped", "failed"]
+            self.starts = 0
+
+        def status(self, profile):
+            return {"state": self.states.pop(0) if self.states else "failed"}
+
+        def start(self, *args, **kwargs):
+            self.starts += 1
+
+        def stop(self, *args, **kwargs):
+            pass
+
+    class FakeEvent:
+        def __init__(self, stop_after):
+            self.stop_after = stop_after
+            self.waits = 0
+            self.done = False
+
+        def is_set(self):
+            return self.done
+
+        def wait(self, seconds):
+            self.waits += 1
+            if self.waits >= self.stop_after:
+                self.done = True
+            return self.done
+
+    class FakeKernel:
+        def GetCurrentProcess(self):
+            return 0
+
+        def SetPriorityClass(self, handle, priority):
+            return 1
+
+    flag, runtime, event = FakeFlag(), FakeRuntime(), FakeEvent(stop_after=2)
+    supervisor = svc.Supervisor("StrataTestNoSuchService", tmp_path / "service.conf")
+    supervisor._runtime, supervisor._profiles = runtime, object()
+    supervisor.stop_event = event
+    supervisor.log = lambda message: None
+    monkeypatch.setattr(svc, "starting_flag", flag)
+    monkeypatch.setattr(svc, "kernel32", FakeKernel())
+    monkeypatch.setattr(svc, "load_conf", lambda path: {
+        "config": str(tmp_path / "strata-a.json"), "unknown": [], "shutdown_timeout": 1})
+    monkeypatch.setattr(svc.Supervisor, "_ensure_profile", lambda self, conf: None)
+    monkeypatch.setattr(svc.Supervisor, "_import_strata", lambda self: True)
+
+    before = os.getcwd()
+    try:
+        supervisor.run()
+    finally:
+        os.chdir(before)
+
+    assert runtime.starts == 2, "the retry after the failed start ran"
+    assert flag.releases >= 2, "the service released the flag it held before retrying"

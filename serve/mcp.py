@@ -37,7 +37,8 @@ import urllib.request
 from serve import lifeline
 
 PROTOCOL = "2025-06-18"               # the MCP revision Strata asks for; the server's answer is used as given
-DEFAULTS = {"timeout_s": 60.0, "max_result_chars": 20000, "max_rounds": 8, "start_timeout_s": 120.0, "image_results": False}
+DEFAULTS = {"timeout_s": 60.0, "max_result_chars": 20000, "max_rounds": 8, "start_timeout_s": 120.0, "image_results": False,
+            "write_nudge": True}      # one more round when the model described code but wrote no file
 
 
 class McpError(RuntimeError):
@@ -679,11 +680,12 @@ def servers_from(block, where: str) -> dict[str, dict]:
 
 
 def settings_from(cfg: dict) -> dict:
-    """The run config's optional `"mcp"` block: timeout_s, max_result_chars, max_rounds, start_timeout_s, image_results."""
+    """The run config's optional `"mcp"` block: timeout_s, max_result_chars, max_rounds, start_timeout_s, image_results,
+    write_nudge."""
     out = {}
     for key, value in (cfg.get("mcp") or {}).items():
         number = isinstance(value, (int, float)) and not isinstance(value, bool)
-        if key == "image_results":
+        if key in ("image_results", "write_nudge"):
             if not isinstance(value, bool):
                 raise SystemExit(f"[strata] config mcp.{key}={value!r}: expected a boolean")
             out[key] = value

@@ -818,13 +818,17 @@ class Supervisor:
                 current = self._runtime.status(PROFILE)
                 state = str(current.get("state", "unknown"))
                 action = decide(state)
+                if starting_flag is not None and state in ("ready", "failed", "stale", "stopped",
+                                                           "not managed"):
+                    # A start that ended without the port answering (failed, stale, or
+                    # stopped by hand) still holds the flag this service took for it.
+                    # Leaving it there makes the next cycle read its own flag as another
+                    # starter and refuse for up to five minutes; releasing it here gives
+                    # the retry its turn. release_own never deletes another starter's flag.
+                    starting_flag.release_own()
                 if action == "wait":
                     if state == "ready":
                         backoff = 5
-                        # The server is answering, so this starter is done: the flag goes now
-                        # rather than at the end of the process's life.
-                        if starting_flag is not None:
-                            starting_flag.release()
                     self.stop_event.wait(5 if state == "ready" else 2)
                     continue
                 if action == "stop-then-start":
@@ -862,19 +866,19 @@ class Supervisor:
             except ServiceError as exc:
                 self.log(f"cannot start: {exc}")
                 if starting_flag is not None:
-                    starting_flag.release()
+                    starting_flag.release_own()
                 self.stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)
             except Exception as exc:                      # noqa: BLE001 - a watchdog must not die
                 self.log(f"start failed: {exc.__class__.__name__}: {exc}")
                 if starting_flag is not None:
-                    starting_flag.release()
+                    starting_flag.release_own()
                 self._tail_runtime_logs()
                 self.stop_event.wait(backoff)
                 backoff = min(backoff * 2, 60)
         self.log("stop requested; stopping the server")
         if starting_flag is not None:
-            starting_flag.release()
+            starting_flag.release_own()
         if self._runtime is not None:
             try:
                 conf = load_conf(self.conf_path)

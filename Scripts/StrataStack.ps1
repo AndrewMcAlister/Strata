@@ -12,7 +12,7 @@
                                               it stays stopped instead of coming back in 15 min.
         -Action Status                        what is running. No elevation needed.
 
-    Why the watchdog is toggled here: it restarts Strata when nothing answers on 8080 for fifteen
+    Why the watchdog is toggled here: it restarts Strata when nothing answers on its port for fifteen
     minutes. A stop that it undoes fifteen minutes later is not a stop, so Stop disables it and
     every Start enables it again.
 
@@ -37,6 +37,7 @@ $BATCH_STOP = 'D:\Strata\Scripts\Strata_Stop.bat'
 $PORT_HELPER = 'D:\Strata\Scripts\Strata_Port.ps1'
 $TASK = 'Strata_EnsureRunning'
 $WORKER = 'SentimentWorker'
+$SERVICE = 'Strata'
 
 function Say([string]$text, [string]$colour = 'Gray') {
     Write-Host $text -ForegroundColor $colour
@@ -61,7 +62,10 @@ function StrataPort {
     return $port
 }
 
-function StrataAnswering([int]$port) {
+function StrataAnswering([int]$port = 0) {
+    # With no port given the answer comes from Scripts\Strata_Port.ps1, the one place that knows
+    # it: 8080 can belong to another program on this PC (a llama.cpp service does here).
+    if ($port -le 0) { $port = StrataPort }
     return (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -gt 0)
 }
 
@@ -96,16 +100,15 @@ switch ($Action) {
         $port = StrataPort
         if ((SetWatchdog $true) -eq $false) { Say ("watchdog: could not be enabled (task '{0}')" -f $TASK) 'Yellow' }
 
-        # The stop happens HERE in process mode, not through the batch's /restart. Strata_Start.bat
-        # treats a running server as "this is the model you meant" and /restart reloads that same
-        # config - it never asks which model. Stopping first means the batch starts with nothing
-        # running, so it offers the menu again. That is the whole point: one click to change model.
-        #
-        # With the Windows service installed there is nothing to stop here: the batch switches the
-        # service (Strata_Service.ps1 -Action Serve stops it, writes the choice and starts it again),
-        # and a stop first would only add a second Administrator prompt to the click.
-        $serviceInstalled = @(Get-Service -Name 'Strata' -ErrorAction SilentlyContinue).Count -gt 0
-        if (-not $serviceInstalled -and (StrataAnswering $port)) {
+        # The stop happens HERE only for a console server. The batch's /restart would reload
+        # the same config instead of offering the menu, so a console server that holds the port
+        # is stopped first. A running service is left alone: Strata_Start.bat's service mode
+        # stops and starts the service itself, with the chosen config, and a stop here would
+        # be a second elevation - one that leaves the service stopped when the switch's
+        # prompt is declined.
+        $service = Get-Service -Name $SERVICE -ErrorAction SilentlyContinue
+        $serviceOwnsPort = $null -ne $service -and $service.Status -ne 'Stopped'
+        if (StrataAnswering -and -not $serviceOwnsPort) {
             Say 'stopping the running model first...' 'Cyan'
             & cmd.exe /c "$BATCH_STOP /quiet" | Out-Null
             Start-Sleep -Seconds 2
@@ -131,6 +134,7 @@ switch ($Action) {
     }
 
     'Stop' {
+        $port = StrataPort
         $watchdog = SetWatchdog $false
         if ($watchdog -eq $false) { Say ("watchdog: could not be disabled (task '{0}')" -f $TASK) 'Yellow' }
         elseif ($watchdog -eq $true) { Say 'watchdog: disabled, so it will not start Strata again' }
@@ -154,10 +158,11 @@ switch ($Action) {
             Say 'SentimentWorker: already stopped'
         }
 
+        $answering = StrataAnswering $port
         Say ''
-        Say ("  {0,-16} {1}" -f 'Strata', $(if (StrataAnswering) { 'STILL answering on 8080' } else { 'stopped' })) $(if (StrataAnswering) { 'Red' } else { 'Green' })
+        Say ("  {0,-16} {1}" -f 'Strata', $(if ($answering) { "STILL answering on $port" } else { 'stopped' })) $(if ($answering) { 'Red' } else { 'Green' })
         Say ("  {0,-16} {1}" -f 'watchdog task', (WatchdogState))
-        if (StrataAnswering) { exit 1 }
+        if ($answering) { exit 1 }
         exit 0
     }
 }

@@ -13,8 +13,10 @@ Protocol
 * A starter calls :func:`acquire` **before** it loads anything. ``False`` back means another
   one is starting, and the caller should log that and do nothing: no second model, no fight
   over the port.
-* The same starter calls :func:`release` when 8080 answers, and on **every** failure path,
-  so a broken config cannot leave the machine permanently "starting".
+* The same starter calls :func:`release_own` when 8080 answers, and on **every** failure
+  path, so a broken config cannot leave the machine permanently "starting" and a stop
+  cannot delete a flag another starter holds. :func:`release` stays for a caller that
+  knows it is the only writer (the watchdog script takes the flag before it calls it).
 * A reader calls :func:`is_fresh` to tell "a Strata is loading" from "a Strata crashed while
   loading": a flag older than :data:`STALE_SECONDS` is debris and is ignored (and cleared by
   the next :func:`acquire`).
@@ -142,6 +144,21 @@ def release(path: Path = FLAG_PATH) -> bool:
         return False
     except OSError:
         return False
+
+
+def release_own(path: Path = FLAG_PATH) -> bool:
+    """Delete the flag only when this process wrote it.
+
+    A service that stops, or gives up on a start that failed after ``acquire`` returned,
+    must not delete another starter's flag: the service and the watchdog share this file,
+    and an unconditional release would let a second model start beside one that is still
+    loading. ``release`` remains for a caller that owns the file by construction, such as
+    the watchdog script between its own acquire and release.
+    """
+    data = read(path)
+    if data is None or data.get("pid") != os.getpid():
+        return False
+    return release(path)
 
 
 def _main(argv: Optional[list] = None) -> int:

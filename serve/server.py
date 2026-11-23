@@ -4886,6 +4886,8 @@ class Service:
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
         self.model_arch = None                        # the config's family ("qwen4exp", "qwen35moe"): None = no model-card defaults
         self.shared = {}                              # the web app's Chat settings for every client (POST /settings)
+        self.panel = {}                               # the web app's own Chat settings, read back on load
+        self.shared_path = None                       # the sidecar both are saved in (set from --config)
         self.shared_path = None                       # where they are kept between starts (next to the config)
         self.config_effort = None                     # #1641: the config's "reasoning_effort": the level for requests with none
         self.keep_awake = None                        # #1727 (opt-in): serve.keepawake.KeepAwake, the config's "prevent_sleep"
@@ -5628,15 +5630,37 @@ class Service:
     def set_shared(self, defaults) -> dict:
         """The Chat settings every client gets for what it leaves out; {} / None = clients use their own again."""
         self.shared = clean_shared_defaults(defaults)
-        if self.shared_path:
-            try:
-                if self.shared:
-                    Path(self.shared_path).write_text(json.dumps(self.shared, indent=1), encoding="utf-8")
-                else:
-                    Path(self.shared_path).unlink(missing_ok=True)
-            except OSError as e:
-                print(f"[strata] could not save the shared settings: {e}", flush=True)
+        self.save_chat_settings()
         return self.shared
+
+    def set_panel(self, panel) -> dict:
+        """The web app's own Chat settings, kept so the next session starts where this one ended.
+
+        Separate from ``set_shared`` on purpose: ``shared`` is what *other* apps get for what they leave
+        out, and the "Use for other apps too" switch owns it.  This is the page's own state, saved on
+        every Apply and read back on load, so a cleared browser or a new day does not silently drop the
+        thinking level, the sampling or the tool switches.
+        """
+        self.panel = clean_panel_settings(panel)
+        self.save_chat_settings()
+        return self.panel
+
+    def save_chat_settings(self) -> None:
+        """Write both kinds of Chat setting to the sidecar, so they outlive the process.
+
+        One file, two sections.  An older server wrote the defaults dict on its own; the loader still
+        accepts that shape, and the file is removed only when there is nothing at all to keep.
+        """
+        if not self.shared_path:
+            return
+        try:
+            if not self.shared and not self.panel:
+                Path(self.shared_path).unlink(missing_ok=True)
+                return
+            body = {"defaults": self.shared, "panel": self.panel}
+            Path(self.shared_path).write_text(json.dumps(body, indent=1), encoding="utf-8")
+        except OSError as e:
+            print(f"[strata] could not save the Chat settings: {e}", flush=True)
 
     def effort_default(self) -> str | None:
         """The thinking level of a request that names none: the Chat settings shared with apps first, then the config's
@@ -7131,6 +7155,15 @@ def _debug_req(api, req, messages, tools, max_new, thinking, prompt_tokens):
 
 
 # ------------------------------------------------------------------------------------------------ MCP tool loop
+NUDGE_MAX = 2                                    # one more round each, per turn: a habit, not a treadmill
+NUDGE_TEXT = (
+    "You described code in your reply and wrote no file this round. Write it now with the file tools, as the "
+    "work stands - a file that exists can be edited afterwards, while text in the reply is lost if the turn "
+    "stops. If the code was only an example for the person rather than part of the task, say so and finish "
+    "without a tool call."
+)
+
+
 def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new, max_req, sampling, cancel,
                  mcp_names):
     """Service.run with the MCP tools executed here: the model writes a call to an MCP tool, the server runs it, adds
@@ -7143,6 +7176,8 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
     turn as always (the client answers it).  MCP calls written in the same answer are then not run (their results
     could not reach the model before the client's)."""
     max_rounds = int(hub.settings["max_rounds"])
+    nudge = bool(hub.settings.get("write_nudge", True)) and bool(mcp_names)
+    nudges = 0
     total, rounds, done = 0, 0, None
     finalizing = False
     messages = list(messages)
@@ -7170,6 +7205,26 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
         total += done["completion_tokens"]
         run_them = calls and not own_calls and not finalizing and done["finish"] == "stop" and not cancel.is_set()
         if not run_them:
+            # The write nudge: a round that ended with no tool call of any kind, whose answer describes code in
+            # fences, is the shape of "the model held the work in its reply".  One more round, with its own text
+            # in the conversation, is the only way the server can turn "I would write this" into the file
+            # existing - and the file is what survives a turn that stops.
+            if (nudge and nudges < NUDGE_MAX and not calls and not own_calls and not finalizing
+                    and done["finish"] == "stop" and not cancel.is_set() and "```" in "".join(text)):
+                nudges += 1
+                messages.append({"role": "assistant", "content": "".join(text).strip()})
+                system_end = next((index for index, message in enumerate(messages)
+                                   if message.get("role") not in ("system", "developer")), len(messages))
+                messages.insert(system_end, {"role": "system", "content": NUDGE_TEXT})
+                yield "mcp", {"event": "nudge", "n": nudges}
+                print(f"[strata] write nudge {nudges}/{NUDGE_MAX}: the round described code and wrote no file",
+                      flush=True)
+                try:
+                    ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req, cancel=cancel, api="mcp")
+                except ClientGone:                           # the client left before the nudge round: as ever
+                    done = {**done, "finish": "cancel"}
+                    break
+                continue
             for c in calls:                              # announced, never run: close them in the client's view
                 yield "mcp", {"event": "result", "id": c.id, "ok": False, "skipped": True, "text": "not run",
                               "chars": 0, "truncated": False, "ms": 0}
@@ -8343,7 +8398,7 @@ def make_handler(svc: Service):
                 return
             if path == "/settings":
                 if self._authorized():
-                    self._json(200, {"shared": bool(svc.shared), "defaults": svc.shared})
+                    self._json(200, {"shared": bool(svc.shared), "defaults": svc.shared, "panel": svc.panel})
                 return
             if path == "/config":                            # #564: the Settings view's keys of the run config
                 if self._authorized():
@@ -8851,18 +8906,25 @@ def make_handler(svc: Service):
                 return
             try:
                 req = json.loads(body or b"{}")
-                if not isinstance(req, dict) or "defaults" not in req:
+                if not isinstance(req, dict) or ("defaults" not in req and "panel" not in req):
                     self._json(400, {"error": {"type": "invalid_request_error",
-                                              "message": 'the body must be {"defaults": {...}} to set them, '
-                                                         'or {"defaults": null} to clear them'}})
+                                              "message": 'the body must carry "defaults" (what other apps get, '
+                                                         'null to clear) and/or "panel" (this page\'s own settings)'}})
                     return
-                shared = svc.set_shared(req["defaults"])
+                if "panel" in req:
+                    panel = svc.set_panel(req["panel"])
+                    print("[strata] the web app's Chat settings are saved: " +
+                          (", ".join(f"{k}={v}" for k, v in panel.items()) if panel else "(cleared)"), flush=True)
+                shared = svc.shared
+                if "defaults" in req:
+                    shared = svc.set_shared(req["defaults"])
             except ValueError as e:
                 self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
                 return
-            print("[strata] other apps now use the Chat settings: " + ", ".join(f"{k}={v}" for k, v in shared.items())
-                  if shared else "[strata] other apps use their own settings again", flush=True)
-            self._json(200, {"shared": bool(shared), "defaults": shared})
+            if "defaults" in req:
+                print("[strata] other apps now use the Chat settings: " + ", ".join(f"{k}={v}" for k, v in shared.items())
+                      if shared else "[strata] other apps use their own settings again", flush=True)
+            self._json(200, {"shared": bool(shared), "defaults": shared, "panel": svc.panel})
 
         def _sse(self):
             self._note(http_status=200)
@@ -8964,6 +9026,8 @@ def make_handler(svc: Service):
                           "without them, and any call it makes is refused as text", flush=True)         # still call one
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
+                if use_mcp:
+                    messages = with_work_in_files(messages)   # write files as the work is done, not at the end
             if force and use_mcp:
                 raise ValueError("a forced tool_choice with MCP tools is not supported")
             svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
@@ -9616,6 +9680,78 @@ def clean_shared_defaults(d) -> dict:
             raise ValueError(f"unknown setting {key!r}")
         out[key] = float(value) if key in ("temperature", "top_p") else value
     return out
+
+
+def clean_panel_settings(d) -> dict:
+    """The web app's own Chat settings (POST /settings {"panel": ...}), so the next session starts
+    where this one ended.  Only known keys, each checked; ValueError names a bad one.
+
+    Unlike the defaults, an empty ``max``/``seed`` is a *value* here — "until done" and "random" are
+    choices, not absences — so the empty strings are kept rather than skipped.
+    """
+    if d is None:
+        return {}
+    if not isinstance(d, dict):
+        raise ValueError("panel must be an object")
+    out = {}
+    for key, value in d.items():
+        number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if key == "thinking":
+            if value not in ("off", "low", "medium", "high"):
+                raise ValueError("thinking: off, low, medium or high")
+        elif key == "temperature":
+            if not number or not 0 <= value <= 2:
+                raise ValueError("temperature: 0..2")
+            value = float(value)
+        elif key == "top_p":
+            if not number or not 0 < value <= 1:
+                raise ValueError("top_p: 0 < top_p <= 1")
+            value = float(value)
+        elif key == "top_k":
+            if not number or value != int(value) or not 1 <= value <= 64:
+                raise ValueError("top_k: an integer 1..64")
+            value = int(value)
+        elif key in ("max", "seed"):
+            if not isinstance(value, str) or (value and not value.isdigit()):
+                raise ValueError(f"{key}: a whole number as text, or empty")
+        elif key == "whileBusy":
+            if value not in ("wait", "queue", "interject"):
+                raise ValueError("whileBusy: wait, queue or interject")
+        elif key in ("math", "show", "esp", "mcp", "chatList", "chatEdit"):
+            if not isinstance(value, bool):
+                raise ValueError(f"{key}: true or false")
+        else:
+            raise ValueError(f"unknown setting {key!r}")
+        out[key] = value
+    return out
+
+
+WRITE_AS_YOU_GO = (
+    "Work in the files, not in the reply. You have tools that read and write files on this PC:\n"
+    "- Write a file as soon as you are confident of its content. Do not compose code in your reply and write "
+    "it all at the end: a turn that stops before the end loses everything you were holding.\n"
+    "- A file you have written can be edited afterwards, so writing early costs nothing; a rewrite from "
+    "memory costs the whole file.\n"
+    "- Read a file before you edit it, and write the smallest change that finishes the job.\n"
+    "- When the task calls for a commit, commit once when the task is done, not after each step."
+)
+
+
+def with_work_in_files(messages: list[dict]) -> list[dict]:
+    """The tool guidance a chat with MCP tools starts with: write the files as the work is done.
+
+    The model used to hold whole files in its reply and write them at the end of the turn, so a turn that
+    stopped early - a crash, the round limit, a cancelled request - lost everything it had written.  The
+    guidance is merged into the client's own system message when there is one (some templates accept only
+    a single system message), and prepended otherwise.
+    """
+    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        content = first.get("content")
+        if isinstance(content, str):
+            first["content"] = (content.rstrip() + "\n\n" + WRITE_AS_YOU_GO).strip() if content.strip() else WRITE_AS_YOU_GO
+            return [first] + list(messages[1:])
+    return [{"role": "system", "content": WRITE_AS_YOU_GO}] + list(messages)
 
 
 def split_joined_args(cfg: dict) -> None:
@@ -10756,15 +10892,29 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
     svc.backend = cfg.get("backend")                    # "hip": the AMD cards' readings come from sysfs (#301)
     if a.config:
         svc.config_path = a.config                      # #564: the web page's Settings view
-    if a.config:                                        # the Chat settings shared with other apps, from last time
+    if a.config:                                        # the Chat settings to restore, from last time
         svc.shared_path = str(Path(a.config).with_suffix("")) + ".shared-settings.json"
         try:
-            svc.shared = clean_shared_defaults(json.loads(Path(svc.shared_path).read_text(encoding="utf-8")))
-            if svc.shared:
-                print("[strata] other apps use the Chat settings: " +
-                      ", ".join(f"{k}={v}" for k, v in svc.shared.items()), flush=True)
+            saved = json.loads(Path(svc.shared_path).read_text(encoding="utf-8-sig"))   # utf-8-sig: a hand-edited file may carry a BOM
         except (OSError, ValueError):
-            svc.shared = {}
+            saved = {}
+        # Two shapes: this server writes {"defaults", "panel"}, the first one wrote the defaults dict
+        # itself.  Both are read, so an upgrade does not lose the settings a person already had.
+        if isinstance(saved, dict) and ("defaults" in saved or "panel" in saved):
+            defaults, panel = saved.get("defaults"), saved.get("panel")
+        else:
+            defaults, panel = saved, None
+        try:
+            svc.shared = clean_shared_defaults(defaults)
+            svc.panel = clean_panel_settings(panel)
+        except ValueError:
+            svc.shared, svc.panel = {}, {}
+        if svc.shared:
+            print("[strata] other apps use the Chat settings: " +
+                  ", ".join(f"{k}={v}" for k, v in svc.shared.items()), flush=True)
+        if svc.panel:
+            print("[strata] the web app's Chat settings are restored: " +
+                  ", ".join(f"{k}={v}" for k, v in svc.panel.items()), flush=True)
     if hub is not None:
         import atexit
         svc.mcp = hub
