@@ -158,6 +158,11 @@ strata update --check
 Stop active models before `strata update`. Very old Terminals require rerunning the installer; see
 [updating](INSTALL.md#updating). Show credentials only to the intended user; redact them from shared logs and reports.
 
+To remove Strata, run `uninstall.sh` (Linux, Mac) or `uninstall.ps1` (Windows) from the same release folder, without
+`--plan`: it stops a running server and removes the Terminal and the `strata` command, and keeps every model folder.
+Add `--purge` (`-Purge`) to remove the engines, settings and chats as well; it prints those folders and asks, and
+`--yes` (`-Yes`) answers in a script. Full text: [uninstalling](INSTALL.md#uninstalling).
+
 ## 8. Source-only and unsupported setups
 
 A source build is a separate workflow: [SOURCE_INSTALL.md](SOURCE_INSTALL.md). `START-HERE.bat`, `SETUP.bat`,

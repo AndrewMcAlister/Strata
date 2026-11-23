@@ -11,7 +11,8 @@ What it writes into FEED (the folder a person would host):
     strata-feed.json + .sig        the signed feed (Ed25519, the key in KEYDIR, made once, never inside a git checkout)
     control/*, engine/*            the Terminal (as a "control" package) and each engine package, archived
     install-manifest.txt           one line per platform for install.sh / install.ps1: platform version url sha256 size (written by feed_tool build-feed)
-    install.sh, install.ps1        the one-line installers with this feed's address filled in (--url)
+    install.sh, install.ps1        the one-line installers with this feed's address filled in (--url), and uninstall.sh / uninstall.ps1
+                                   beside them, as in a release folder
     test-trust.json                the PUBLIC test key: `STRATA_UPDATE_TRUSTED_KEYS=<this file>` lets this build trust the feed
                                    (the real key goes into strata_control/update_keys.json at release; this one never does)
 
@@ -104,7 +105,7 @@ def main(argv=None) -> int:
         for suffix in ("", ".sig"):
             shutil.copy2(out / ("strata-feed.json" + suffix), out / ("strata-feed-linux-aarch64.json" + suffix))
     base = a.url.rstrip("/")
-    for name in ("install.sh", "install.ps1"):
+    for name in ("install.sh", "install.ps1", "uninstall.sh", "uninstall.ps1"):
         text = (ROOT / "packaging" / name).read_text(encoding="utf-8").replace(RELEASE_FEED, base)
         (out / name).write_text(text, encoding="utf-8", newline="\n" if name.endswith(".sh") else None)
     (out / "test-trust.json").write_text((keys / "feed-key.pub.json").read_text(encoding="utf-8"), encoding="utf-8")

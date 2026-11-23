@@ -12,7 +12,8 @@ install does not need a source checkout or a startup `.bat` file.
 | The terminal, or my coding tool | Run the one-line install, then `strata launch` ([steps](#the-terminal)) |
 
 [Requirements](#what-you-need) · [Desktop app](#the-app) · [Terminal](#the-terminal) ·
-[Update](#updating) · [Files and folders](#where-things-are-stored) · [Build from source](SOURCE_INSTALL.md)
+[Update](#updating) · [Uninstall](#uninstalling) · [Files and folders](#where-things-are-stored) ·
+[Build from source](SOURCE_INSTALL.md)
 
 ## What you need
 
@@ -126,6 +127,33 @@ Control component. The app, Control and engine have separate version numbers, so
 
 Use `strata components rollback` to return to the previous engine. See [update details](../packaging/UPDATES.md).
 Source checkouts have a [separate update workflow](SOURCE_INSTALL.md#updating).
+
+## Uninstalling
+
+**Desktop app.** Windows: open **Settings > Apps > Installed apps**, find **Strata**, and choose **Uninstall**.
+Linux: delete the `.AppImage` file. Mac: open Applications and move **Strata** to the Trash.
+
+The app uninstaller removes the app. Your models stay in the folder you chose, and chats and settings stay in
+`~/.strata` (or `STRATA_HOME`); see [Where things are stored](#where-things-are-stored).
+
+**Terminal.** Linux and Mac:
+
+```sh
+curl -fsSL --connect-timeout 15 --max-time 120 https://github.com/Niko1221/Strata/releases/latest/download/uninstall.sh -o uninstall.sh && sh uninstall.sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm -TimeoutSec 120 https://github.com/Niko1221/Strata/releases/latest/download/uninstall.ps1 -OutFile "$env:TEMP\strata-uninstall.ps1"; & "$env:TEMP\strata-uninstall.ps1"
+```
+
+It stops a running server and removes the installed Terminal and the `strata` command. Model folders are not
+touched. `--purge` (`-Purge` on Windows) also removes Strata's engines, saved settings and chats: it prints those
+folders first and asks, and `--yes` (`-Yes`) answers for a script. `--plan` (`-Plan`) shows what would be removed and
+changes nothing.
+
+To install it again, run the same line as [the Terminal](#the-terminal).
 
 ## Where things are stored
 

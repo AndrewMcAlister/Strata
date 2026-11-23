@@ -85,8 +85,10 @@ class Feed(unittest.TestCase):
             feed = work / "feed"
             rc = make_local_feed.main(["--out", str(feed), "--terminal", str(archive), "--keys", str(work / "keys"), "--url", "http://127.0.0.1:1"])
             self.assertEqual(rc, 0)
-            for name in ("strata-feed.json", "strata-feed.json.sig", "install-manifest.txt", "install.sh", "install.ps1", "test-trust.json"):
+            for name in ("strata-feed.json", "strata-feed.json.sig", "install-manifest.txt", "install.sh", "install.ps1",
+                         "uninstall.sh", "uninstall.ps1", "test-trust.json"):
                 self.assertTrue((feed / name).is_file(), name)
+            self.assertIn("launch --stop", (feed / "uninstall.ps1").read_text())
             line = (feed / "install-manifest.txt").read_text().split()
             self.assertEqual(line[0], PLAT)
             self.assertEqual(line[1], "9.9.9")
