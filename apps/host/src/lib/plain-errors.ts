@@ -45,6 +45,11 @@ const RULES: Rule[] = [
   { kind: 'memory', match: /out of memory|memory guard|\boom\b|\bkilled\b|exit code 137|cannot allocate memory|not enough memory|bad_alloc|pinned-memory-exhausted|mapped staging|cudaErrorMemoryAllocation|insufficient memory/i, message: MEMORY, next: MEMORY_NEXT },
   { kind: 'previous-session', match: /lost host child is still present|retry after it exits/i, message: 'The last Strata session is still closing down.', next: 'Wait a moment and try again. If it keeps happening, restart the computer.' },
   { kind: 'start-failed', match: /server_exited|engine stopped|exited before|died before/i, message: 'The model stopped while starting.', next: 'Try again. If it keeps happening, open Details and share them when you ask for help.' },
+  // A line that dropped mid-answer, in the words the runtime uses: "Failed to fetch" (a chat stream that ended when the model
+  // server restarted or went away), "fetch failed" and "socket hang up" on the host side. Until 2026-11-24 these reached the
+  // screen as they were, so an engine that could not start showed the person a browser TypeError instead of a sentence.
+  // The download rule's own words (cannot reach, timed out, connection refused) are left to it, below.
+  { kind: 'connection', match: /failed to fetch|fetch failed|networkerror|load failed|network error|err_connection|socket hang up|premature close|connection (?:closed|lost|dropped)/i, message: 'Strata lost its connection to the model.', next: 'The model may have stopped or be restarting. Press Try again.' },
   { kind: 'slow-load', match: /loading took more than/i, message: 'Loading is taking too long.', next: 'The PC may be short on memory. Close other programs and try again.' },
   { kind: 'engine-missing', match: /no engine for this pc|engine component|never downloads an engine|engine .*not installed|no strata engine/i, message: 'Strata’s engine for this computer isn’t installed yet.', next: 'It is added when you download a model. Download your model again to add it.' },
   { kind: 'network', match: /cannot reach|could not reach|can't reach|timed out|econn|enotfound|getaddrinfo|urlopen|connection (?:reset|refused|aborted)|network is unreachable/i, message: 'The download couldn’t reach the internet.', next: 'Check your connection, then press Resume download.' },

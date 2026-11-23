@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 const languages = ['en', 'zh', 'ja', 'de', 'es', 'ru', 'pt', 'ko', 'fr'];
-const catalogs = Object.fromEntries(await Promise.all(languages.map(async l => [l, ({ ...JSON.parse(await readFile(`src/locales/${l}.json`, 'utf8')), ...JSON.parse(await readFile(`src/locales/engine-${l}.json`, 'utf8')), ...JSON.parse(await readFile(`src/locales/gui-${l}.json`, 'utf8')) })])));
+const catalogs = Object.fromEntries(await Promise.all(languages.map(async l => [l, ({ ...JSON.parse(await readFile(`src/locales/${l}.json`, 'utf8')), ...JSON.parse(await readFile(`src/locales/engine-${l}.json`, 'utf8')), ...JSON.parse(await readFile(`src/locales/gui-${l}.json`, 'utf8')), ...JSON.parse(await readFile(`src/locales/conn-${l}.json`, 'utf8')) })])));
 const built = await build({ stdin: { contents: "export * from './src/lib/plain-errors'; export * from './src/lib/i18n';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', loader: { '.json': 'json' } });
 const { plainFailure, plainFailureText, setTranslationLanguage, loadCatalog } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
 for (const l of ['zh', 'ja', 'de', 'es', 'ru', 'pt', 'ko', 'fr']) await loadCatalog(l);  // the non-English catalogs load on first use (src/lib/i18n.ts loadCatalog); load them before the first tr()
@@ -39,6 +39,9 @@ const cases = [
   ['server_exited (exit code 1): strata generate: GPU 0 (AMD Radeon 760M Graphics, gfx1103) is not an architecture this Strata engine was compiled for (gfx1200,gfx1201); compile it for this card', 'gpu-no-code', /no code for the graphics card/],
   ['server_exited (exit code 1): [strata] none of this computer\'s graphics cards has code in this Strata engine (it is built for gfx1200,gfx1201). Cards found: AMD Radeon RX 6800 XT (gfx1030).', 'gpu-no-code', /no code for the graphics card/],
   ['Traceback (most recent call last):\n  File "x.py", line 3', 'technical', /Something went wrong/],
+  ['TypeError: Failed to fetch', 'connection', /lost its connection to the model/],
+  ['fetch failed', 'connection', /lost its connection to the model/],
+  ['socket hang up', 'connection', /lost its connection to the model/],
 ];
 
 for (const [raw, kind, message] of cases) {
@@ -65,6 +68,25 @@ test('a DeepSeek model of an earlier Strata: Control’s own words, the folder a
   }
   assert.notEqual(plainFailure('server_exited').kind, 'deepseek-retired');
   assert.notEqual(plainFailure('The agent component (DeepSeek Harness) is not installed.').kind, 'deepseek-retired');
+});
+
+test('a line that dropped mid-answer is said in words, in every language (the "Failed to fetch" of 11-24)', () => {
+  const f = plainFailure('TypeError: Failed to fetch');
+  assert.equal(f.kind, 'connection');
+  assert.equal(f.message, 'Strata lost its connection to the model.');
+  assert.equal(f.detail, 'TypeError: Failed to fetch', 'the browser’s own words stay under Details');
+  for (const language of languages) {
+    setTranslationLanguage(language);
+    const shown = plainFailureText('TypeError: Failed to fetch');
+    if (language !== 'en') {
+      assert.notEqual(shown.message, f.message, `${language}: the sentence is translated`);
+      assert.notEqual(shown.next, f.next, `${language}: the next step is translated`);
+    }
+    assert.equal(shown.detail, 'TypeError: Failed to fetch', `${language}: the original text stays`);
+  }
+  setTranslationLanguage('en');
+  // The download rule keeps its own words: a download that cannot reach a server is not the model's connection.
+  assert.equal(plainFailure('cannot reach huggingface.co (timed out)').kind, 'network');
 });
 
 test('an ordinary sentence is left as it is and gets no Details', () => {

@@ -2233,12 +2233,16 @@ export async function sendMessage(text: string, options: { fromLoop?: boolean; g
       // Nothing to take over (the turn ended and the host no longer holds it): the reply stays as the page had it.
       patchAssistant((m) => ({ ...m, streaming: false }));
     } else if ((err as Error).name !== 'AbortError') {
+      // Not `err.message`: a stream that dropped says "Failed to fetch" in the browser's words, and the person was shown
+      // that. The plain sentence goes on the message and the original text under Details (as every other failure does).
+      const failure = plainFailureText(err instanceof Error ? err.message : String(err));
       patchAssistant((m) => ({
         ...m,
         streaming: false,
-        error: err instanceof Error ? err.message : 'Engine error',
+        error: failure.message,
+        errorDetail: failure.detail,
       }));
-      pushToast('error', 'Generation failed', err instanceof Error ? err.message : undefined);
+      pushToast('error', 'Generation failed', failure.message);
     } else {
       patchAssistant((m) => ({ ...m, streaming: false }));
     }

@@ -15,4 +15,5 @@ import pic from '../locales/pic-ko.json';
 import gui from '../locales/gui-ko.json';
 import sav from '../locales/sav-ko.json';
 import net from '../locales/net-ko.json';
-export default {...base,...tune,...tools,...fix,...gh,...ui,...engine,...pick,...df2,...upd,...r3,...pic,...gui,...sav,...net} as Record<string,string>;
+import conn from '../locales/conn-ko.json';
+export default {...base,...tune,...tools,...fix,...gh,...ui,...engine,...pick,...df2,...upd,...r3,...pic,...gui,...sav,...net,...conn} as Record<string,string>;

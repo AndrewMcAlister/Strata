@@ -15,4 +15,5 @@ import pic from '../locales/pic-ja.json';
 import gui from '../locales/gui-ja.json';
 import sav from '../locales/sav-ja.json';
 import net from '../locales/net-ja.json';
-export default {...base,...tune,...tools,...fix,...gh,...ui,...engine,...pick,...df2,...upd,...r3,...pic,...gui,...sav,...net} as Record<string,string>;
+import conn from '../locales/conn-ja.json';
+export default {...base,...tune,...tools,...fix,...gh,...ui,...engine,...pick,...df2,...upd,...r3,...pic,...gui,...sav,...net,...conn} as Record<string,string>;
