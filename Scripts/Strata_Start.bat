@@ -111,12 +111,16 @@ if defined HELP goto help
 rem --- where is Strata? -------------------------------------------------------------------------
 set "ROOT="
 if exist "%HERE%\serve\server.py" set "ROOT=%HERE%"
-if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%\terminal"
+if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%"
 if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
-if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
-if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
+if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD"
+if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT goto noroot
+rem 0.2.16 keeps two folders apart: ROOT is the top one (strata-*.json, Scripts\, START-HERE.bat),
+rem SERVERDIR is the one holding serve\server.py and its .venv (terminal\, or ROOT in an older clone).
+set "SERVERDIR=%ROOT%"
+if not exist "%SERVERDIR%\serve\server.py" set "SERVERDIR=%ROOT%\terminal"
 
 rem --- /status is the stop script's job, so there is only one place that answers that ------------
 if defined STATUS goto status
@@ -137,7 +141,8 @@ if not errorlevel 1 set "SERVEMODE=1"
 :modechosen
 
 rem --- without an environment there is nothing to start: hand over to the first-run script ------
-set "PY=%ROOT%\.venv\Scripts\python.exe"
+set "PY=%SERVERDIR%\.venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=%ROOT%\.venv\Scripts\python.exe"
 if not exist "%PY%" goto setup
 
 rem --- the Windows service owns port 8080 too, so a start beside it cannot bind ---------------
@@ -537,7 +542,7 @@ echo  The model is loading: the first start takes a minute or two, watch this wi
 echo  ready line.  Stop it with Ctrl+C here, or with Strata_Stop.bat from another window.
 echo.
 cd /d "%ROOT%"
-"%PY%" "%ROOT%\serve\server.py" %ENGINEARG% %OPEN% %EXTRA%
+"%PY%" "%SERVERDIR%\serve\server.py" %ENGINEARG% %OPEN% %EXTRA%
 set "CODE=%ERRORLEVEL%"
 if not "%CODE%"=="0" echo.
 if not "%CODE%"=="0" echo  Strata ended with code %CODE%.
@@ -748,7 +753,7 @@ echo  what is already running could not be looked at.  That is usually a locked-
 echo  security software blocking the WMI query.
 echo.
 echo  The probe left nothing behind; run the server by hand to start it without one:
-echo    "%PY%" "%ROOT%\serve\server.py" --engine strata --config "strata-YOUR.json" --port 8080
+echo    "%PY%" "%SERVERDIR%\serve\server.py" --engine strata --config "strata-YOUR.json" --port 8080
 echo.
 exit /b 3
 

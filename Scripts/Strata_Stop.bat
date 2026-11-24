@@ -60,12 +60,16 @@ if "%MODE%"=="help" goto help
 rem --- where is Strata? -------------------------------------------------------------------------
 set "ROOT="
 if exist "%HERE%\serve\server.py" set "ROOT=%HERE%"
-if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%\terminal"
+if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%"
 if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
-if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
-if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
+if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD"
+if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT goto noroot
+rem 0.2.16 keeps two folders apart: ROOT is the top one (strata-*.json, Scripts\, START-HERE.bat),
+rem SERVERDIR is the one holding serve\server.py and its .venv (terminal\, or ROOT in an older clone).
+set "SERVERDIR=%ROOT%"
+if not exist "%SERVERDIR%\serve\server.py" set "SERVERDIR=%ROOT%\terminal"
 if not defined QUIET echo  Strata folder: %ROOT%
 
 rem --- a Windows service owns Strata when it runs --------------------------------------------------
@@ -87,10 +91,11 @@ where powershell >nul 2>nul
 if errorlevel 1 goto nops
 set "PSFILE=%TEMP%\strata-stop-%RANDOM%.ps1"
 
->"%PSFILE%" echo param([string]$Root = '', [string]$Mode = 'stop', [int]$Grace = 60, [string]$Quiet = '')
+>"%PSFILE%" echo param([string]$Root = '', [string]$ServerDir = '', [string]$Mode = 'stop', [int]$Grace = 60, [string]$Quiet = '')
+>>"%PSFILE%" echo if (-not $ServerDir) { $ServerDir = $Root }
 >>"%PSFILE%" echo $ErrorActionPreference = 'SilentlyContinue'
 >>"%PSFILE%" echo $ct = [System.StringComparison]::OrdinalIgnoreCase
->>"%PSFILE%" echo $venvdir = $Root + '\.venv\Scripts'
+>>"%PSFILE%" echo $venvdir = $ServerDir + '\.venv\Scripts'
 >>"%PSFILE%" echo $engdir = $Root + '\engine'
 >>"%PSFILE%" echo function UnderDir($path, $dir) {
 >>"%PSFILE%" echo     if ($path -eq '') { return $false }
@@ -151,7 +156,7 @@ rem would win the "newest" test below.  A real config carries the engine path an
 >>"%PSFILE%" echo     $key = [string]$p.ProcessId
 >>"%PSFILE%" echo     $isServer = $false
 >>"%PSFILE%" echo     if ((UnderDir $path ($venvdir + '\')) -and (Mentions $cmd 'serve\server.py')) { $isServer = $true }
->>"%PSFILE%" echo     if (Mentions $cmd ($Root + '\serve\server.py')) { $isServer = $true }
+>>"%PSFILE%" echo     if (Mentions $cmd ($ServerDir + '\serve\server.py')) { $isServer = $true }
 >>"%PSFILE%" echo     if ($isServer -and -not $seen.ContainsKey($key)) {
 >>"%PSFILE%" echo         $seen[$key] = 1
 >>"%PSFILE%" echo         [void]$servers.Add($p)
@@ -338,7 +343,7 @@ rem would win the "newest" test below.  A real config carries the engine path an
 >>"%PSFILE%" echo exit 1
 
 rem --- run it -----------------------------------------------------------------------------------
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -Mode "%MODE%" -Grace %GRACE% -Quiet "%QUIET%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -ServerDir "%SERVERDIR%" -Mode "%MODE%" -Grace %GRACE% -Quiet "%QUIET%"
 set "CODE=%ERRORLEVEL%"
 del "%PSFILE%" >nul 2>nul
 exit /b %CODE%
@@ -370,7 +375,7 @@ echo.
 echo  Strata runs as the Windows service "%SVCN%", so its processes belong to SYSTEM and cannot be seen
 echo  from here.  Stopping the service needs Administrator rights: asking for them now.
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $p = Start-Process -FilePath '%ROOT%\.venv\Scripts\python.exe' -ArgumentList '%ROOT%\Scripts\Strata_Service.py','stop','--name','%SVCN%' -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode } catch { Write-Host 'Administrator rights were not given, so the service is still running.'; exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $p = Start-Process -FilePath '%SERVERDIR%\.venv\Scripts\python.exe' -ArgumentList '%ROOT%\Scripts\Strata_Service.py','stop','--name','%SVCN%' -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode } catch { Write-Host 'Administrator rights were not given, so the service is still running.'; exit 1 }"
 set "SVCCODE=%ERRORLEVEL%"
 echo.
 if "%SVCCODE%"=="0" echo  Strata stopped: the service is stopped and the model has ended.
