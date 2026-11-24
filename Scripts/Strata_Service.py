@@ -64,6 +64,10 @@ except Exception as exc:  # noqa: BLE001 - a missing flag module must not stop t
 # <install>\terminal\current, and resolving it here would register the versioned
 # folder instead, which a later update removes.
 ROOT = Path(os.path.abspath(__file__)).parent.parent
+# 0.2.16 layout: setup.py, strata_control, the server and the venv live in <repo>/terminal; an older clone has them at ROOT
+for _candidate in (ROOT / "terminal", ROOT):
+    if (_candidate / "strata_control").is_dir() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
 SCRIPT = Path(os.path.abspath(__file__))
 SERVICE_NAME = "Strata"
 DISPLAY_NAME = "Strata AI Server"
@@ -504,7 +508,8 @@ def stable_python(root: Path = ROOT) -> Path:
     stable install root, so the service survives an update that replaces a versioned
     folder behind the ``current`` junction.
     """
-    for candidate in (root / "python" / "python.exe", root / ".venv" / "Scripts" / "python.exe"):
+    for candidate in (root / "python" / "python.exe", root / ".venv" / "Scripts" / "python.exe",
+                      root / "terminal" / "python" / "python.exe", root / "terminal" / ".venv" / "Scripts" / "python.exe"):
         if candidate.is_file():
             return candidate
     return Path(sys.executable)

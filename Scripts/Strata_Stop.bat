@@ -60,8 +60,11 @@ if "%MODE%"=="help" goto help
 rem --- where is Strata? -------------------------------------------------------------------------
 set "ROOT="
 if exist "%HERE%\serve\server.py" set "ROOT=%HERE%"
+if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%\terminal"
 if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
+if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
+if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
 if not defined ROOT goto noroot
 if not defined QUIET echo  Strata folder: %ROOT%
 

@@ -33,9 +33,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$PY = Join-Path $Root '.venv\Scripts\python.exe'
+$TERMINAL = if (Test-Path -LiteralPath (Join-Path $Root 'terminal\strata.py')) { Join-Path $Root 'terminal' } else { $Root }
+$PY = Join-Path $TERMINAL '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $PY)) { $PY = Join-Path $Root '.venv\Scripts\python.exe' }
 if (-not (Test-Path -LiteralPath $PY)) { $PY = 'python' }
-$STRATA = Join-Path $Root 'strata.py'
+$STRATA = Join-Path $TERMINAL 'strata.py'
+$env:PYTHONPATH = $TERMINAL          # the probe below imports strata_control from here
 $SERVICE = Join-Path $Root 'Scripts\Strata_Service.ps1'
 
 function ConfPath {

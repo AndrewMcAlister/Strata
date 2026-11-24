@@ -111,8 +111,11 @@ if defined HELP goto help
 rem --- where is Strata? -------------------------------------------------------------------------
 set "ROOT="
 if exist "%HERE%\serve\server.py" set "ROOT=%HERE%"
+if exist "%HERE%\terminal\serve\server.py" set "ROOT=%HERE%\terminal"
 if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
 if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\serve\server.py" set "ROOT=%%~fD"
+if not defined ROOT for %%D in ("%HERE%\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
+if not defined ROOT for %%D in ("%HERE%\..\..") do if exist "%%~fD\terminal\serve\server.py" set "ROOT=%%~fD\terminal"
 if not defined ROOT goto noroot
 
 rem --- /status is the stop script's job, so there is only one place that answers that ------------
