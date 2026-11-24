@@ -130,7 +130,17 @@ switch ($Action) {
         # window closes when the menu is answered. Without it the server lives in this window,
         # and closing the window stops it.
         & cmd.exe /c ("$BATCH_START " + ($runArgs -join ' '))
-        exit $LASTEXITCODE
+        $startCode = $LASTEXITCODE
+        if ($startCode -ne 0) {
+            # A start that ended before the model ran (3 = nothing to start, 1 = the model could not
+            # be loaded, ...). Without this the window closed and the reason was lost; /nopause is
+            # what the shortcut passes, so the batch itself never waits.
+            Say ''
+            Say ("Strata did not start (Strata_Start.bat ended with code {0})." -f $startCode) 'Yellow'
+            Say 'The lines above say why; nothing was left running.' 'Yellow'
+            Read-Host 'Press Enter to close this window' | Out-Null
+        }
+        exit $startCode
     }
 
     'Stop' {
