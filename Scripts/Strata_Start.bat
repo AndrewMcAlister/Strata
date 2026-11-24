@@ -179,7 +179,7 @@ set "EXFILE=%TEMP%\strata-args-%RANDOM%.txt"
 rem an empty %EXTRA% would make this "echo" alone, which writes the words "ECHO is on."
 if defined EXTRA (>"%EXFILE%" echo %EXTRA%) else (type nul >"%EXFILE%")
 
->"%PSFILE%" echo param([string]$Root = '', [string]$Extras = '', [string]$All = '')
+>"%PSFILE%" echo param([string]$Root = '', [string]$ServerDir = '', [string]$Extras = '', [string]$All = '')
 >>"%PSFILE%" echo $ErrorActionPreference = 'SilentlyContinue'
 >>"%PSFILE%" echo $ct = [System.StringComparison]::OrdinalIgnoreCase
 >>"%PSFILE%" echo $venvdir = $Root + '\.venv\Scripts'
@@ -287,7 +287,15 @@ rem and the same IsConfig test as before) so the start can offer it; the newest 
 >>"%PSFILE%" echo $configs = New-Object System.Collections.ArrayList
 >>"%PSFILE%" echo $newest = $null
 >>"%PSFILE%" echo if ($cfg -eq '') {
->>"%PSFILE%" echo     foreach ($f in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
+>>"%PSFILE%" echo     $cfgs = @(); $seen = @{}
+>>"%PSFILE%" echo     foreach ($d in @($ServerDir, $Root)) {
+>>"%PSFILE%" echo         if (-not $d) { continue }
+>>"%PSFILE%" echo         foreach ($f in @(Get-ChildItem -LiteralPath $d -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
+>>"%PSFILE%" echo             if ($seen.ContainsKey($f.Name)) { continue }
+>>"%PSFILE%" echo             $seen[$f.Name] = 1; $cfgs += $f
+>>"%PSFILE%" echo         }
+>>"%PSFILE%" echo     }
+>>"%PSFILE%" echo     foreach ($f in $cfgs) {
 >>"%PSFILE%" echo         if (-not (IsConfig $f.FullName)) { continue }
 >>"%PSFILE%" echo         if (IsHidden $f.FullName) { continue }
 >>"%PSFILE%" echo         [void]$configs.Add($f)
@@ -392,7 +400,7 @@ set "SEL="
 set "PSOUT=%TEMP%\strata-start-%RANDOM%.out"
 set "ALLARG="
 if defined SERVEMODE set "ALLARG=-All 1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -Extras "%EXFILE%" %ALLARG% >"%PSOUT%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -ServerDir "%SERVERDIR%" -Extras "%EXFILE%" %ALLARG% >"%PSOUT%" 2>nul
 set "PROBECODE=%ERRORLEVEL%"
 if "%PROBECODE%"=="0" for /f "usebackq delims=" %%A in ("%PSOUT%") do set "%%A"
 del "%PSFILE%" >nul 2>nul
@@ -492,7 +500,7 @@ rem list that may be ordered differently. On 23-11 the two disagreed and the def
 rem config on a PC whose card is an NVIDIA one. The name is looked up in this list, so they cannot disagree.
 set "DEFNAME="
 if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
-  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%"`) do set "DEFNAME=%%A"
+  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%" -ServerDir "%SERVERDIR%"`) do set "DEFNAME=%%A"
 )
 set "DEF="
 if defined DEFNAME (

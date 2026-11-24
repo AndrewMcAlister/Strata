@@ -216,7 +216,8 @@ rem would win the "newest" test below.  A real config carries the engine path an
 >>"%PSFILE%" echo }
 >>"%PSFILE%" echo if ($cfg -eq '') {
 >>"%PSFILE%" echo     $newest = $null
->>"%PSFILE%" echo     foreach ($f in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
+>>"%PSFILE%" echo     $cfgd = @($ServerDir, $Root)
+>>"%PSFILE%" echo     foreach ($f in @($cfgd | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter 'strata-*.json' -ErrorAction SilentlyContinue })) {
 >>"%PSFILE%" echo         if (-not (IsConfig $f.FullName)) { continue }
 >>"%PSFILE%" echo         if (($newest -eq $null) -or ($f.LastWriteTime -gt $newest.LastWriteTime)) { $newest = $f }
 >>"%PSFILE%" echo     }

@@ -30,7 +30,8 @@
     Falls back to the first model in the list, then to the first without vision. Prints
     nothing when the folder holds no config, and the batch uses its first entry.
 #>
-param([string]$Root = 'D:\Strata')
+param([string]$Root = 'D:\Strata', [string]$ServerDir = '')
+if (-not $ServerDir) { $ServerDir = $Root }
 
 # The default model, by model_name. One line to change.
 # It names the config the Windows service serves on the tuned PC (strata-q4_k_xl_dflash2_94k_novision.json),
@@ -42,7 +43,15 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $rows = @()
 $position = 0
-foreach ($file in @(Get-ChildItem -LiteralPath $Root -Filter 'strata-*.json' |
+$cfgs = @(); $seen = @{}
+foreach ($d in @($ServerDir, $Root)) {
+    if (-not $d) { continue }
+    foreach ($g in @(Get-ChildItem -LiteralPath $d -Filter 'strata-*.json' -ErrorAction SilentlyContinue)) {
+        if ($seen.ContainsKey($g.Name)) { continue }
+        $seen[$g.Name] = 1; $cfgs += $g
+    }
+}
+foreach ($file in ($cfgs |
                     Sort-Object @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$false})) {
     if ($file.Name -like '*.shared-settings.json') { continue }
     # The Radeon (gfx906) hand build's configs: not a choice on this PC (see the note above).
