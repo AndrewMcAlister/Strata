@@ -25,7 +25,7 @@ carrying a diverging branch forever.
 | Browser start page | `Scripts/Strata_Start.bat` | `serve/server.py` |
 | Cache ids (`cache_system`, `cache_client`) | — | `serve/server.py`, `serve/test_server.py` |
 | Named prompt blocks (`POST /cache`, `{{cache:NAME}}`) | `serve/prompt_blocks.py` | `serve/server.py`, `serve/test_server.py`, `tools/strata_mcp.py`, `tools/test_strata_mcp.py` |
-| MCP tools in use | `tools/filesystem_mcp.py`, `tools/web_search_mcp.py` | none |
+| MCP tools in use | `tools/filesystem_mcp.py`, `tools/web_search_mcp.py`, `tools/skills_mcp.py`, `tools/terminal_mcp.py` | none |
 
 Everything else is upstream's.
 
@@ -125,33 +125,57 @@ current refusal code.
 
 ## 4. MCP tools (every model config carries them)
 
-- `tools/filesystem_mcp.py` (files, policy-gated), `tools/web_search_mcp.py` (web)
+- `tools/filesystem_mcp.py` (files, policy-gated), `tools/web_search_mcp.py` (web),
+  `tools/skills_mcp.py` (the skills folder, read-only), `tools/terminal_mcp.py` (a command line).
 - `tools/sync_model_tools.py` writes the same `mcp` + `mcp_servers` block into
-  every `strata-*.json` the start menu offers; `--check` reports a config that
-  has drifted. It preserves each file's mtime so the menu order does not move.
+  every `strata-*.json` in this folder and in `terminal\` - the two places the start menu,
+  the app and the Windows service look. `--check` reports a config that has drifted. It
+  preserves each file's mtime so the menu order does not move.
 
 The tools are a property of the install, not of which weights are loaded: a
 config without them is a model that truthfully tells the user it has no
 filesystem access. That is how the q4 configs, built from scratch, ended up
-without the block the iq2/iq3 configs had. Run the sync after adding a config.
+without the block the iq2/iq3 configs had, and how the Inkling config the service
+serves ended up with none at all. Run the sync after adding a config.
 
 ```json
 "mcp_servers": {
-  "web":   {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\web_search_mcp.py"]},
-  "files": {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\filesystem_mcp.py", "--root", "D:\\", "--policy", "D:\\strata-data.json"]}
+  "web":    {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\web_search_mcp.py"]},
+  "files":  {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\filesystem_mcp.py", "--root", "D:\\", "--policy", "D:\\strata-data.json"]},
+  "skills": {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\skills_mcp.py", "--root", "D:\\skills"]},
+  "terminal": {"command": "D:\\Strata\\.venv\\Scripts\\python.exe", "args": ["D:\\Strata\\tools\\terminal_mcp.py", "--cwd", "D:\\"]}
 }
 ```
 
 The policy lives at `D:\strata-data.json` - outside this repository, not tracked,
-and read once when the files server starts. Git working trees (including their
-`.git` folder) and any folder whose name contains "temp" are writable, and
-`prohibited` always wins. If the file is missing or unparseable the server still
+and read once when the files server starts. Git working trees and any folder whose
+name contains "temp" are writable (`"writable": {"temp_folders": true}`), and
+`prohibited` always wins: the policy prohibits `**\.git\**`, so a chat edits files
+and leaves history to git. If the file is missing or unparseable the server still
 starts but refuses every change, so "I have no filesystem access" is worth
 checking there first. To see the decision for one path:
 
 ```
 python tools/filesystem_mcp.py --policy D:\strata-data.json --explain D:\PaperTrader\ledger
 ```
+
+The `skills` tool answers `list_skills`, `read_skill`, `read_skill_file` and
+`search_skills` over `D:\skills` (38 skills at the time of writing: the
+`skills\<category>\<name>\SKILL.md` layout). It reads and never writes; skills are
+edited through the files server, under the same policy.
+
+**Verify:**
+
+```
+python tools/filesystem_mcp.py --policy D:\strata-data.json --selftest
+python tools/skills_mcp.py --root D:\skills --selftest
+python tools/sync_model_tools.py --check
+python -m serve.mcp strata-inkling-2-mini-sq-20.json      # from terminal\: every server and its tools
+```
+
+The server keeps the MCP block it read at start, so a config change or a new policy
+is used from the next start: `Scripts\Strata_Service.ps1 -Action Restart` for the
+service, `Scripts\Strata_Start.bat /restart` for a start by hand.
 
 ### Chat compaction (fork feature)
 
