@@ -1378,7 +1378,10 @@ allows, and on a hybrid CPU with more efficiency than performance cores the perf
 efficiency cores. The start line says what bounded the number (`CPU pool: 31 workers by default (32 physical cores, ...)`).
 Workers wait by spinning, so a worker without a core of its own takes time from the others. A count in the config is always
 used as given; when it is above what the CPU uses well, the engine prints a warning with the recommended number
-(`strata cpu pool: warning: ...`). Setup writes no worker count except the hybrid CPU's, and gives the CPU vision encoder at most 16
+(`strata cpu pool: warning: ...`). The app's Expert settings has a field for it, "CPU cores used for experts": it saves
+`pool_workers` in the model's run config and writes `--pool-workers` into its `args`, so the app's Load, `strata launch`,
+`strata serve` and a Docker start all read the same number. Blank and 0 mean Automatic: the engine's own count, and in the
+app's "Leave room for other apps" the rule of 80% of the physical cores. Setup writes no worker count except the hybrid CPU's, and gives the CPU vision encoder at most 16
 threads (`--threads` in the `vision` entry changes that).
 
 `--pool-tasks N` sets the target total number of row tasks in each batched CPU expert gate/up and down phase (the default `0` keeps

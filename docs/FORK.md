@@ -38,13 +38,16 @@ from Task Manager.
   leaves its serve loop on stdin EOF and returns RAM and locked VRAM. Options: `/force`,
   `/timeout N`, `/status`.
 - `Strata_Start.bat` starts a model, lists the installed `strata-*.json` files when there
-  is more than one and asks which to start (Enter takes the newest; `/newest` skips),
-  refuses a second copy, reports an engine left behind by a dead server, ignores the
-  `strata-<tag>.shared-settings.json` sidecar, refuses to start the mock engine when no
-  model is installed, and times out the model prompt. Options: `/restart`, `/status`,
-  `/window`, `/noopen`.
-- `Strata_DefaultModel.ps1` is the start script's source of "what is the default model";
-  the script calls it if present.
+  is more than one and asks which to start (Enter takes the default, which is the first line;
+  `/newest` skips the question and takes the newest config), refuses a second copy, reports an
+  engine left behind by a dead server, ignores the `strata-<tag>.shared-settings.json` sidecar,
+  refuses to start the mock engine when no model is installed, and times out the model prompt.
+  Options: `/restart`, `/status`, `/window`, `/noopen`.
+- `Strata_DefaultModel.ps1` is the start script's source of "what is the default model": the script
+  calls it before it builds the menu, by file name, and hands the name to the probe as `-First`, so
+  the default heads the list and an unanswered start runs it. The named default wins; what this
+  PC's `service.conf` serves is the fallback when the named one is not installed. The script calls it
+  if present.
 - When **the Windows service** owns Strata, `Strata_Stop.bat` asks the SCM instead of the
   process probe. A service's processes are SYSTEM's, and `Get-CimInstance` hides their
   `ExecutablePath` and `CommandLine` from a normal account, so the probe found nothing and

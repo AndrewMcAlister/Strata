@@ -58,6 +58,21 @@ export function reserveChoice(config,hardware,values={},baselineReserve=0){
 }
 export const explicitReserve=(config,values={},hardware=null)=>reserveChoice(config,hardware,values).asked;
 
+/** A whole number, or null: what a worker count must be (no fractions, no text, never negative). */
+const wholeCount=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))&&Number.isInteger(Number(v))&&Number(v)>=0?Math.trunc(Number(v)):null;
+
+/** The CPU expert workers the person asked for (null: nothing set, so the engine picks its own count). "pool_workers" is the setting of the
+ *  app's Expert settings and of `strata launch --set pool-workers=N`; the block that writes it in native-control also puts --pool-workers into
+ *  "args", so the Terminal reads the same number. --pool-workers in "user_args", or written into "args" by hand since the file was last written,
+ *  is the same answer. 0 and a blank field mean Automatic: the rules below, or the engine's own default. */
+export function workerChoice(config,values={}){
+ if(values&&typeof values==='object'&&Object.hasOwn(values,'pool_workers')){const n=wholeCount(values.pool_workers);if(n!==null)return n>0?n:null;}
+ const asked=wholeCount(flagValue(capture(config),'--pool-workers'));
+ if(asked!==null)return asked>0?asked:null;
+ const key=wholeCount(config?.pool_workers);
+ return key!==null&&key>0?key:null;
+}
+
 /** True when the probe says this card drives no display: only compute runs on it. Unknown counts as a display card. */
 const computeOnly=g=>g?.drives_display===false;
 
@@ -76,7 +91,14 @@ export function resourceSettings(config,hardware,profile,model={},values={}){
   remove('--pool-workers');if(baseline.workers>0)args.push('--pool-workers',String(baseline.workers));
  }
  const cores=Number(hardware?.cpu?.cores)||0;
- if(profile==='work'&&cores>1){
+ const ownWorkers=workerChoice(config,values);
+ if(ownWorkers!==null){
+  /* A count the person set runs as given: the engine prints its recommendation when it is above what the CPU uses well, and never
+   * overrules it. The two profiles and the tuning rule below only fill in when nobody chose (#3417: the count is the person's setting). */
+  remove('--pool-workers');args.push('--pool-workers',String(ownWorkers));
+ }else if(profile==='performance'&&config.ui_resource_profile==='work'){
+  remove('--pool-workers');if(baseline.workers>0)args.push('--pool-workers',String(baseline.workers));
+ }else if(profile==='work'&&cores>1){
   const at=args.indexOf('--pool-workers'),previous=at>=0?Number(args[at+1]):0;
   /* 80% of the physical cores rounded UP, never more than the cores less the host thread (the engine's own count): floor(0.8 x 6) = 4 ran 8-10% slower than the engine's 5 on a 6-core Ryzen (notes-023-tune.md); 12 logical threads gave 9 in 0.2.1. */
   const workers=Math.max(1,Math.min(cores-1,Math.ceil(cores*.8)));remove('--pool-workers');

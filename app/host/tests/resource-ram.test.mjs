@@ -260,6 +260,19 @@ test('0.2.3 tuning: the Work profile takes 80% of the PHYSICAL cores rounded up,
   assert.equal(flag(resourceSettings(own, { cpu: { cores: 6 }, ram_gb: 64, gpus: [] }, 'work').args, '--pool-workers'), '3', 'a count the person set stays when it is lower');
 });
 
+test('#3417: the CPU cores used is the person’s setting — --pool-workers as given, the profile only fills in when nobody chose', () => {
+  const hw = cores => ({ cpu: { cores }, ram_gb: 128, gpus: [{ index: 0, vram_gb: 16 }] });
+  const w = (cfg, cores = 18, profile = 'work') => Number(flag(resourceSettings(cfg, hw(cores), profile).args, '--pool-workers'));
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 17 }), 17, '18 cores, 17 asked: kept, not lowered to the 80% rule’s 15');
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 18 }), 18, 'every core, as asked (the engine warns if that is too many, it does not refuse)');
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 1 }), 1);
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 0 }), 15, '0 is Automatic: the measured 80% rule, 15 of 18');
+  assert.equal(w({ gpu: 0, args: [] }), 15, 'a file with no setting keeps the behaviour it had');
+  assert.equal(w({ gpu: 0, args: ['--pool-workers', '17'], user_args: ['--pool-workers', '17'] }), 17, 'a count written by hand is the person’s too');
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 17 }, 18, 'performance'), 17, 'full performance keeps it');
+  assert.equal(w({ gpu: 0, args: [], pool_workers: 17, ui_resource_profile: 'work' }, 18, 'performance'), 17, 'switching the profile does not take it back');
+});
+
 test('0.2.3 tuning: Work keeps a fifth of the card but no more than 1536 MiB on a card of 16 GB or less; a CPU picture reader needs no 2048 floor', () => {
   const card = gb => ({ cpu: { cores: 6 }, ram_gb: 64, gpus: [{ index: 0, vram_gb: gb, drives_display: true }] });
   assert.equal(resourceSettings({ gpu: 0, args: [] }, card(11.9), 'work').vram_reserve_mib, 1536, 'RTX 5070: 2437 gave 38 tok/s, 1536 gave 46 (Gyro-S 64K), with 1.1 GiB still free');

@@ -1,17 +1,21 @@
 <#
     Which model an unattended start should choose.
 
-    THE TUNED 94K CONFIG IS THE DEFAULT on the PC that has it. It is the configuration this
-    machine was tuned for: the 40 GiB pinned expert budget, the adaptive RAM tier that follows
-    the conversation, and the expert profile learned from real work. An unattended start - the
-    task at logon - is the one case where nobody has chosen anything, so it gets the model the
-    day-to-day work actually runs on rather than the cheapest one installed.
+    THE TUNED 94K CONFIG IS THE DEFAULT on the PC that has it, and it is the FIRST line of the menu
+    too: Strata_Start.bat asks this script before it builds its list and puts that file at the top,
+    so the default is always the first key. It is the configuration this machine was tuned for: the
+    40 GiB pinned expert budget, the adaptive RAM tier that follows the conversation, and the expert
+    profile learned from real work. An unattended start - the task at logon - is the one case where
+    nobody has chosen anything, so it gets the model the day-to-day work actually runs on rather
+    than the cheapest one installed.
 
-    WHAT THIS PC SERVES COMES FIRST. service.conf names the model the Windows service serves, and
-    that file is per computer (ProgramData), so a folder of configs shared by two PCs can serve the
-    94K Q4 on one and the 20K IQ2_XS on the other - the one whose model files and card are there.
-    When the service is not installed, or names a config that is no longer a row in this list, the
-    named default below is used, then the first model without vision, then the first.
+    WHAT THIS PC'S SERVICE SERVES COMES SECOND. service.conf names the model the Windows service
+    serves, and that file is per computer (ProgramData), so a folder of configs shared by two PCs
+    can serve the 94K Q4 on one and the 20K IQ2_XS on the other - the one whose model files and card
+    are there. It answers when the named default is not installed here, then the first model, then
+    the first without vision. (Until 25 November 2026 those two rules were the other way round, so
+    a service.conf naming the 15B Inkling took the default away from the named Q4. The owner asked
+    for the Q4 first and by default.)
 
     Chosen by name, not by position. The list Strata_Start.bat shows is ordered by file
     write time, so editing any config reorders it: a hardcoded "2" was correct until the
@@ -73,7 +77,13 @@ foreach ($file in ($cfgs |
     }
 }
 
-# 0. what this PC's Windows service serves: service.conf is per computer, so this is the model whose
+# 0. the named default, when set: the tuned 94K Q4, and the first line of the menu
+if ($DEFAULT_MODEL -ne '') {
+    $hit = $rows | Where-Object { $_.Name -eq $DEFAULT_MODEL } | Select-Object -First 1
+    if ($hit) { Write-Output $hit.Config; exit 0 }
+}
+
+# 1. what this PC's Windows service serves: service.conf is per computer, so this is the model whose
 #    files and card are here (the shared configs themselves never have to change between the two PCs).
 $confPath = if ($env:STRATA_SERVICE_ROOT) { Join-Path $env:STRATA_SERVICE_ROOT 'service.conf' }
             elseif ($env:ProgramData) { Join-Path $env:ProgramData 'Strata\service\service.conf' }
@@ -88,12 +98,6 @@ if (Test-Path -LiteralPath $confPath) {
         $served_row = $rows | Where-Object { $_.Config -eq $leaf } | Select-Object -First 1
         if ($served_row) { Write-Output $served_row.Config; exit 0 }
     }
-}
-
-# 1. the named default, when set
-if ($DEFAULT_MODEL -ne '') {
-    $hit = $rows | Where-Object { $_.Name -eq $DEFAULT_MODEL } | Select-Object -First 1
-    if ($hit) { Write-Output $hit.Config; exit 0 }
 }
 
 # 2. the first model in the list: newest first, the filename as the tie-break so it cannot

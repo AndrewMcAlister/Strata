@@ -42,12 +42,21 @@ rem               or no model is installed), 4 could not stop the old server for
 rem               the exit code of the server itself when it ends.
 rem ==============================================================================================
 rem
-rem  MODEL CHOICES - the run configs in D:\Strata, newest first, which is the order the prompt lists.
-rem  The menu keys are LETTERS: a is the first line, b the second, and so on.
+rem  MODEL CHOICES - the run configs in Strata's folder (D:\Strata) and its terminal\ folder,
+rem  newest first, which is the order the prompt lists.  The menu keys are LETTERS: a is the
+rem  first line, b the second, and so on.
 rem
-rem    key  model                                                context    drafter  vision  quant     config
-rem    a    qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision      94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (the default)
-rem    b    qwen3.8-flash-next-iq2_xs (20k)                      20,480     mtp      no      IQ2_XS    strata-iq2_xs-20k.json                     (smallest, fastest)
+rem    context    drafter  vision  quant     config
+rem    94,208     dflash2  no      Q4_K_XL   strata-q4_k_xl_dflash2_94k_novision.json   (the tuned config)
+rem    65,536     mtp      no      IQ2_XS    strata-iq2_xs-20k.json                     (learned profile)
+rem    65,536     mtp      no      IQ2_XS    strata-iq2_xs.json                         (default profile)
+rem    65,536     dspark   no      SQ-15     strata-inkling-2-mini-sq-15.json
+rem    65,536     dspark   no      SQ-20     strata-inkling-2-mini-sq-20.json
+rem
+rem  Nothing is offered under 64K (65,536 tokens): at 32K the agent's own compaction had almost
+rem  no room before the window ended, so a long coding task ran out.  The floor is
+rem  strata_control/default_context.py MIN_CONTEXT; the numbers above are each config's
+rem  --max-context.  The engine itself has no floor.
 rem
 rem  NOT OFFERED: strata-*mi50*.json.  Those are the Radeon (gfx906) hand build's configs: their
 rem  "exe" is D:\Strata\build-906-win\strata.exe and their "backend" is "hip", and this PC's engine
@@ -55,10 +64,12 @@ rem  is the CUDA component, so they cannot load here.  The files stay in the fol
 rem  PC; the probe's IsHidden test leaves them out of this menu and out of the default.
 rem
 rem  One drafter at a time: dflash2 (a block drafter, ~1.2 GB of VRAM, its configs reserve
-rem  1280 MiB) or the MTP layer. b still runs the MTP layer.
+rem  1280 MiB) or the MTP layer.  The IQ2_XS configs run the MTP layer; Inkling's DSpark is
+rem  part of the model.
 rem
-rem  a is the default: /newest starts it and the Strata_EnsureRunning task restores it. The order is
-rem  each config write time, so leave the mtimes alone or the letters change.
+rem  The default is the config Strata_DefaultModel.ps1 prints (a name, never a line number): the tuned
+rem  94K Q4, then this PC's service.conf.  The probe puts that file FIRST, so the default is key a and
+rem  the key letters after it are the other configs, newest first.
 rem
 rem  Where the parts are: models D:\Strata-data\models, packs D:\Strata-data\packs,
 rem  draft layer D:\Strata-data\dflash2, logs and learned profile C:\Strata-scratch.
@@ -179,7 +190,7 @@ set "EXFILE=%TEMP%\strata-args-%RANDOM%.txt"
 rem an empty %EXTRA% would make this "echo" alone, which writes the words "ECHO is on."
 if defined EXTRA (>"%EXFILE%" echo %EXTRA%) else (type nul >"%EXFILE%")
 
->"%PSFILE%" echo param([string]$Root = '', [string]$ServerDir = '', [string]$Extras = '', [string]$All = '')
+>"%PSFILE%" echo param([string]$Root = '', [string]$ServerDir = '', [string]$Extras = '', [string]$All = '', [string]$First = '')
 >>"%PSFILE%" echo $ErrorActionPreference = 'SilentlyContinue'
 >>"%PSFILE%" echo $ct = [System.StringComparison]::OrdinalIgnoreCase
 >>"%PSFILE%" echo $venvdir = $Root + '\.venv\Scripts'
@@ -281,8 +292,10 @@ rem about to be replaced, so its config is not a choice to keep - All says so, a
 rem takes the newest-config path below, which is where the menu comes from.
 >>"%PSFILE%" echo if ($All -eq '1') { $cfg = '' }
 rem AUTO says the config is the fallback below and not one asked for, so it is the only case where
-rem asking which model to start is a real question.  The list is kept (newest first, the same order
-rem and the same IsConfig test as before) so the start can offer it; the newest stays the default.
+rem asking which model to start is a real question.  The list is kept (the same IsConfig test as
+rem before) so the start can offer it.  The fallback is the model the batch named with -First (the
+rem default from Strata_DefaultModel.ps1), or the newest when it named none: an unanswered start and
+rem the first line of the menu are then the same model. /newest names none on purpose.
 >>"%PSFILE%" echo $auto = 0
 >>"%PSFILE%" echo $configs = New-Object System.Collections.ArrayList
 >>"%PSFILE%" echo $newest = $null
@@ -303,6 +316,9 @@ rem and the same IsConfig test as before) so the start can offer it; the newest 
 >>"%PSFILE%" echo     }
 >>"%PSFILE%" echo     if ($newest -ne $null) { $cfg = $newest.FullName; $auto = 1 }
 >>"%PSFILE%" echo }
+rem The model the batch named with -First is what an unanswered start runs (nothing was running and
+rem no --config was given): the default model, so this start and the menu's first line are the same.
+>>"%PSFILE%" echo if ($auto -eq 1 -and $First -ne '') { foreach ($f in $configs) { if ($f.Name -ieq $First) { $cfg = $f.FullName; break } } }
 >>"%PSFILE%" echo $model = ''
 >>"%PSFILE%" echo $exe = ''
 >>"%PSFILE%" echo $jsonport = 0
@@ -347,10 +363,14 @@ rem The candidates, newest first, each with what the batch needs to start it: th
 rem user picks from, and the path, name, engine and port of that choice.  PORT is emitted rather
 rem than recomputed because a config whose port differs from the running one would otherwise be
 rem started on the wrong port.
+rem PICK is the default model's config when the batch found it by name (DEFNAME, read before this probe
+rem runs), else the newest: the menu's first line is the default, whatever the files' write times are.
 >>"%PSFILE%" echo if ($auto -eq 1) {
+>>"%PSFILE%" echo     $pick = $newest
+>>"%PSFILE%" echo     if ($First -ne '') { foreach ($f in $configs) { if ($f.Name -ieq $First) { $pick = $f; break } } }
 >>"%PSFILE%" echo     $ordered = New-Object System.Collections.ArrayList
->>"%PSFILE%" echo     [void]$ordered.Add($newest)
->>"%PSFILE%" echo     foreach ($f in $configs) { if ($f.FullName -ne $newest.FullName) { [void]$ordered.Add($f) } }
+>>"%PSFILE%" echo     [void]$ordered.Add($pick)
+>>"%PSFILE%" echo     foreach ($f in $configs) { if ($f.FullName -ne $pick.FullName) { [void]$ordered.Add($f) } }
 >>"%PSFILE%" echo     Write-Output ('NCFG=' + $ordered.Count)
 >>"%PSFILE%" echo     for ($i = 0; $i -lt $ordered.Count; $i++) {
 >>"%PSFILE%" echo         $k = $i + 1
@@ -366,11 +386,12 @@ rem started on the wrong port.
 >>"%PSFILE%" echo             if ($jj.port) { $jp = [int]$jj.port }
 >>"%PSFILE%" echo         }
 >>"%PSFILE%" echo         if ($m -eq '') { $m = 'strata' }
-rem --- display labels: three of these model_name values do not say how much context they run.
-rem --- The menu shows exactly what you pick, so the map adds the bracketed size for those three.
+rem --- display labels: some model_name values are the same or do not say how much context they run.
+rem --- The menu shows exactly what you pick, so the map adds the size and the profile for those.
 rem --- It is a label only: the config and its model_name are untouched.
 >>"%PSFILE%" echo         $labels = @{
->>"%PSFILE%" echo             'strata-iq2_xs-20k.json'      = 'qwen3.8-flash-next-iq2_xs (20k)'
+>>"%PSFILE%" echo             'strata-iq2_xs-20k.json'      = 'qwen3.8-flash-next-iq2_xs (64k, learned profile)'
+>>"%PSFILE%" echo             'strata-iq2_xs.json'          = 'qwen3.8-flash-next-iq2_xs (64k, default profile)'
 >>"%PSFILE%" echo             'strata-iq3_xxs-dflash2.json' = 'qwen3.8-flash-next-iq3_xxs-dflash2 (94k)'
 >>"%PSFILE%" echo             'strata-q3_k_xl.json'         = 'qwen3.8-flash-next-q3_k_xl (70k)'
 >>"%PSFILE%" echo             'strata-iq2_xs-dflash2.json'  = 'qwen3.8-flash-next-iq2_xs (20k, dflash2)'
@@ -397,10 +418,21 @@ set "NCFG="
 set "TTY="
 set "WANTPORT="
 set "SEL="
+rem The default model, by FILE NAME, read before the probe builds the menu: the probe puts that file
+rem first, so the default is always the first key (Scripts\Strata_DefaultModel.ps1 says which one, and
+rem names it rather than a position: a position is a fact about a list ordered by write time).
+rem /newest asks for the old behaviour on purpose - the newest config, first and started - so nothing
+rem is named and the probe keeps to write times.
+set "DEFNAME="
+if not defined NEWEST (
+  if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
+    for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%" -ServerDir "%SERVERDIR%"`) do set "DEFNAME=%%A"
+  )
+)
 set "PSOUT=%TEMP%\strata-start-%RANDOM%.out"
 set "ALLARG="
 if defined SERVEMODE set "ALLARG=-All 1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -ServerDir "%SERVERDIR%" -Extras "%EXFILE%" %ALLARG% >"%PSOUT%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" -Root "%ROOT%" -ServerDir "%SERVERDIR%" -Extras "%EXFILE%" %ALLARG% -First "%DEFNAME%" >"%PSOUT%" 2>nul
 set "PROBECODE=%ERRORLEVEL%"
 if "%PROBECODE%"=="0" for /f "usebackq delims=" %%A in ("%PSOUT%") do set "%%A"
 del "%PSFILE%" >nul 2>nul
@@ -489,19 +521,13 @@ echo.
 :pickprompt
 rem A TIMED prompt. set /p waits for ever, which is wrong here twice over: a start at
 rem logon has nobody watching it, and a start from a shortcut that is ignored would hold
-rem the console open indefinitely. choice /t returns after twenty seconds with the default,
-rem which is the model without --vision (see the DEF block below): vision loads a second
-rem engine and a 900 MB projector, VRAM an unattended start does not need, and the models
-rem that keep vision stay selectable. ORDER IS STILL NEWEST-FIRST, so the numbering can
-rem change; the default follows the property rather than the number.
-rem WHAT THE DEFAULT IS comes from Strata_DefaultModel.ps1, which prints the config FILE NAME, not a
-rem position: this list's order is the probe's own, and a position computed elsewhere is a fact about a
-rem list that may be ordered differently. On 23-11 the two disagreed and the default opened the Radeon
-rem config on a PC whose card is an NVIDIA one. The name is looked up in this list, so they cannot disagree.
-set "DEFNAME="
-if exist "%ROOT%\Scripts\Strata_DefaultModel.ps1" (
-  for /f "usebackq delims=" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_DefaultModel.ps1" -Root "%ROOT%" -ServerDir "%SERVERDIR%"`) do set "DEFNAME=%%A"
-)
+rem the console open indefinitely. choice /t returns after twenty seconds with the default: the first
+rem line, since the probe above put the default model's config there.
+rem WHAT THE DEFAULT IS comes from Strata_DefaultModel.ps1, which printed the config FILE NAME before
+rem the probe ran (DEFNAME, read above). It is a name rather than a position because a position is a
+rem fact about a list ordered by write time: on 23-11 the two orders disagreed and the default opened
+rem the Radeon config on a PC whose card is an NVIDIA one. The name is looked up in this list below,
+rem so the menu and the default cannot disagree.
 set "DEF="
 if defined DEFNAME (
   for /l %%i in (1,1,%NCFG%) do (

@@ -25,6 +25,7 @@ SCRIPT = ROOT / "Scripts" / "Strata_Start.bat"
 LINES = SCRIPT.read_text(encoding="utf-8").splitlines()
 ENSURE = ROOT / "Scripts" / "Strata-EnsureRunning.ps1"
 STACK = ROOT / "Scripts" / "StrataStack.ps1"
+PROBE_DEFAULT = ROOT / "Scripts" / "Strata_DefaultModel.ps1"
 
 
 def line_of(needle: str) -> int:
@@ -150,6 +151,64 @@ class StackStartDoesNotStopTheService(unittest.TestCase):
         stop = text.index('& cmd.exe /c "$BATCH_STOP /quiet"')
         self.assertLess(guard, conditional)
         self.assertLess(conditional, stop)
+
+
+class TheDefaultModelHeadsTheMenu(unittest.TestCase):
+    """The owner asked for the tuned Q4 to be the first line and the default (25 November 2026).
+
+    The default is named by Scripts/Strata_DefaultModel.ps1, and the batch asks it BEFORE it builds
+    the menu and hands the name to the probe as -First: the probe puts that file first, so the
+    default is key a whatever the configs' write times are.  Without that, editing any config moves
+    it to the top and takes the first key - and with it, before this change, the default - away.
+    """
+
+    def setUp(self):
+        self.text = SCRIPT.read_text(encoding="utf-8")
+        self.lines = self.text.splitlines()
+
+    def line_of(self, needle: str) -> int:
+        return next((i for i, line in enumerate(self.lines) if needle in line), -1)
+
+    def test_the_default_is_read_before_the_probe_runs(self):
+        lookup = self.line_of('Strata_DefaultModel.ps1" -Root "%ROOT%" -ServerDir "%SERVERDIR%"')
+        probe = self.line_of('-Extras "%EXFILE%" %ALLARG% -First "%DEFNAME%"')
+        self.assertGreater(lookup, -1, "the default is read by name")
+        self.assertGreater(probe, -1, "and handed to the probe")
+        self.assertLess(lookup, probe, "the name has to be known before the probe builds the list")
+
+    def test_the_default_is_asked_for_once(self):
+        self.assertEqual(self.text.count('Strata_DefaultModel.ps1" -Root "%ROOT%"'), 1,
+                         "a second lookup inside the picker would ask the same question again")
+
+    def test_the_probe_puts_the_named_file_first(self):
+        for line in ('$pick = $newest',
+                     "if ($First -ne '') { foreach ($f in $configs) { if ($f.Name -ieq $First) { $pick = $f; break } } }",
+                     '[void]$ordered.Add($pick)',
+                     'foreach ($f in $configs) { if ($f.FullName -ne $pick.FullName) { [void]$ordered.Add($f) } }'):
+            self.assertIn(line, self.text, line)
+
+    def test_an_unanswered_start_runs_the_default_too(self):
+        """No console, nothing running: the start used to take the newest. It takes the named default,
+        so the model an unattended start loads and the menu's first line cannot differ."""
+        self.assertIn("if ($auto -eq 1 -and $First -ne '') { foreach ($f in $configs) { if ($f.Name -ieq $First) { $cfg = $f.FullName; break } } }", self.text)
+
+    def test_newest_keeps_its_meaning(self):
+        """/newest is the old behaviour asked for on purpose: nothing is named, so nothing is pinned."""
+        guard = self.line_of("if not defined NEWEST (")
+        lookup = self.line_of('Strata_DefaultModel.ps1" -Root "%ROOT%"')
+        self.assertGreater(guard, -1)
+        self.assertLess(guard, lookup)
+
+    def test_the_default_model_is_the_tuned_q4(self):
+        model = PROBE_DEFAULT.read_text(encoding="utf-8")
+        self.assertIn("$DEFAULT_MODEL = 'qwen3.8-flash-next-q4_k_xl_dflash2_94k_novision'", model)
+
+    def test_the_named_default_answers_before_the_service_config(self):
+        """service.conf names what the service serves; it is the fallback, not the choice."""
+        model = PROBE_DEFAULT.read_text(encoding="utf-8")
+        named = model.index("if ($DEFAULT_MODEL -ne '')")
+        service = model.index("$confPath =")
+        self.assertLess(named, service)
 
 
 if __name__ == "__main__":

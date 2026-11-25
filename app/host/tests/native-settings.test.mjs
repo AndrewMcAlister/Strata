@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {validateNativeSettings,validateMcpServers,publicMcpServers,publicNativeEnv,restoreNativeEnv} from '../server/native-settings.mjs';
 import {validateChatImages} from '../server/chat-images.mjs';
 test('native settings reject invalid ranges and unmanaged network arguments',()=>{
- assert.deepEqual(validateNativeSettings({parallel:2,layer_split:'16,32',reasoning_budget_tokens:null,sampling:{temperature:.7}}),{parallel:2,layer_split:'16,32',reasoning_budget_tokens:null,sampling:{temperature:.7}});
- for(const value of [{parallel:0},{parallel:1.2},{layer_split:'32,16'},{layer_split:'48'},{exe:'/tmp/program'},{args:['--host','0.0.0.0']},{env:{HOME:'/tmp'}},{sampling:{top_p:2}},{anthropic_thinking:'always'}])assert.throws(()=>validateNativeSettings(value));
+ assert.deepEqual(validateNativeSettings({parallel:2,layer_split:'16,32',reasoning_budget_tokens:null,sampling:{temperature:.7},pool_workers:17}),{parallel:2,layer_split:'16,32',reasoning_budget_tokens:null,sampling:{temperature:.7},pool_workers:17});
+ for(const value of [{parallel:0},{parallel:1.2},{layer_split:'32,16'},{layer_split:'48'},{exe:'/tmp/program'},{args:['--host','0.0.0.0']},{env:{HOME:'/tmp'}},{sampling:{top_p:2}},{anthropic_thinking:'always'},{pool_workers:-1},{pool_workers:2.5},{pool_workers:257}])assert.throws(()=>validateNativeSettings(value));
+ assert.deepEqual(validateNativeSettings({pool_workers:0}),{pool_workers:0},'0 means Automatic, not a refused count');
+ assert.deepEqual(validateNativeSettings({pool_workers:''}),{pool_workers:null},'a blank field is Automatic (null), not 0 cores');
 });
 test('MCP secrets round trip masked values and reject malformed transport settings',()=>{
  const previous={files:{command:'node',args:['server.mjs'],env:{API_KEY:'private-key'},disabled:false},remote:{url:'https://example.test/mcp',headers:{Authorization:'Bearer private'}}};

@@ -57,9 +57,13 @@ def compact_at(t: Target) -> int:
 
     A flat 15,000 summarises a wider server every 15,000 tokens - 6% of a 256K window - while the tested configs compact
     a 32K server at 52% of its input limit. The share is what carries over, not the number: a 32K server keeps exactly
-    the value it was tested at."""
+    the value it was tested at.
+
+    On a window narrower than that, the flat number is capped at the input limit (the window less the reply's room): a
+    compaction point past it would come after the prompt was already too large to send, so the chat would fail before the
+    app ever compacted. A 20K server keeps 15,000 (under its 16,384 input limit); a 16K one compacts at 12,288."""
     tested_limit = TESTED_CONTEXT - OUTPUT_CAP
-    return max(COMPACT_AT, int(t.input_limit * COMPACT_AT / tested_limit))
+    return max(1024, min(max(COMPACT_AT, int(t.input_limit * COMPACT_AT / tested_limit)), t.input_limit))
 
 
 @dataclass

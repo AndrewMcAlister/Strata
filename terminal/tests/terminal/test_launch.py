@@ -1466,6 +1466,18 @@ class ConnectCommand(unittest.TestCase):
         tested = harness.target("http://127.0.0.1:18900", None, "qwen3.8-flash-next-q2_0", 32768)
         self.assertEqual(harness.compact_at(tested), 15000)
 
+    def test_a_window_below_the_tested_one_never_compacts_past_its_input_limit(self):
+        """A hard-limit window is compacted while the prompt can still be sent: the flat 15,000 is capped at the input limit."""
+        twenty = harness.target("http://127.0.0.1:18900", None, "qwen3.8-flash-next-q2_0", 20480)
+        self.assertEqual(twenty.input_limit, 16384)
+        self.assertEqual(harness.compact_at(twenty), 15000)                    # still under its input limit
+        small = harness.target("http://127.0.0.1:18900", None, "qwen3.8-flash-next-q2_0", 16384)
+        self.assertEqual(small.input_limit, 12288)
+        self.assertEqual(harness.compact_at(small), 12288)
+        pi = json.loads(self.render("pi", context=16384)["files"][1]["text"])
+        self.assertEqual(pi["compaction"]["reserveTokens"], 4096)             # 16384 - 12288: the reply's room
+        self.assertEqual(harness.compact_at(harness.target("http://127.0.0.1:18900", None, "m", 4096)), 1024)
+
 
 class GpuRolesFlag(unittest.TestCase):
     """--gpu-roles: a role for each card (strata_control/gpu_roles.py); unnamed cards are Off."""

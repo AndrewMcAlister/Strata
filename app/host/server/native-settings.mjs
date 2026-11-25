@@ -22,6 +22,7 @@ export const NATIVE_FIELDS=[
  {id:'split_skip_if_fits',label:'Use one GPU when the model fits',group:'GPU & memory',type:'boolean'},
  {id:'vram_elastic',label:'Elastic GPU expert cache',group:'GPU & memory',type:'boolean'},
  {id:'vram_reserve_mib',label:'GPU memory for other apps (MiB)',group:'GPU & memory',type:'number',min:0,max:131072,hint:'Applied as --vram-reserve-mib when loading.'},
+ {id:'pool_workers',label:'CPU cores used for experts',group:'GPU & memory',type:'number',min:0,max:256,hint:'How many cores compute the experts the graphics card does not hold. Blank (or 0) lets the engine choose: one worker per physical core, with the host thread’s core and one more kept out of the pool. Applied as --pool-workers when loading, so a Terminal start reads the same number; a count above what the CPU uses well is used as given, with a warning in the engine log.'},
  {id:'prompt_cache_spread',label:'Spread prompt cache checkpoints',group:'GPU & memory',type:'boolean',hint:'Keeps conversation cache checkpoints spaced back through the chat instead of only the latest turns. Uses the same RAM and speeds up agent compaction on hybrid models. Default is on in the desktop app.'},
  {id:'vision_tokens',label:'Maximum image tokens',group:'Image reading',type:'number',min:1,max:16384},
  {id:'vision_min_tokens',label:'Minimum image tokens',group:'Image reading',type:'number',min:0,max:16384},
