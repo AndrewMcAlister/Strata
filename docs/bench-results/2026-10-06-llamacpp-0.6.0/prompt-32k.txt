@@ -973,7 +973,7 @@ also paste as it is (key `"mcpServers"`):
   "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\me\\Documents\\notes"]},
   "search": {"url": "http://127.0.0.1:3000/mcp", "headers": {"Authorization": "Bearer ..."}}
 },
-"mcp": {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 8}
+"mcp": {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 50}
 ```
 
 Or keep them in their own file and start the server with `--mcp-config path\to\claude_desktop_config.json` (a file

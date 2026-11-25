@@ -61,7 +61,7 @@
  "mcp": {
   "timeout_s": 60,
   "max_result_chars": 20000,
-  "max_rounds": 8
+  "max_rounds": 50
  },
  "mcp_servers": {
   "web": {

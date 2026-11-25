@@ -60,7 +60,7 @@ TERMINAL_CWD = "D:\\"                                # where a command starts wh
 SKILLS_ROOT = r"D:\skills"                           # the skills folder the `skills` tool reads
 CONFIG_DIRS = (ROOT, ROOT / "terminal")              # where the start menu, the app and the service look
 
-MCP = {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 8}
+MCP = {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 50}
 
 
 def servers(data_dir: Path | None) -> dict:

@@ -1080,7 +1080,7 @@ List the servers in `strata-<model>.json` under `"mcp_servers"`, the same shape 
     "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\me\\Documents\\notes"]},
     "search": {"url": "http://127.0.0.1:3000/mcp", "headers": {"Authorization": "Bearer ..."}}
   },
-  "mcp": {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 8}
+  "mcp": {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 50}
 }
 ```
 
