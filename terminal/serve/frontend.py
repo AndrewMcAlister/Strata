@@ -1408,9 +1408,12 @@ def function_end(text: str) -> int:
 _JSON_FENCE = re.compile(r"```[ \t]*(?:json)?[ \t]*\r?\n\s*", re.I)
 
 
-def json_tool_call(body: str, schemas: dict) -> ToolCall | None:
+def json_tool_call(body: str, schemas: dict, aliases: dict | None = None) -> ToolCall | None:
     """`{"name": N, "arguments": {...}}` (or "parameters", or the arguments as a JSON string) of a declared tool -> its
-    call; anything else -> None.  #2037: the object may sit in a Markdown fence (```json ... ```)."""
+    call; anything else -> None.  #2037: the object may sit in a Markdown fence (```json ... ```).  `aliases` (the
+    parser's own map) reads a spelling of a declared name as that tool, exactly as the `<function=` form does: this
+    is the form Inkling-2-Mini and the JSON templates write, and a model shortens an MCP name there too
+    (`files__write_file` for `mcp__files__write_file`, `read_file` for `mcp__files__read_file`)."""
     body = body.strip()
     m = _JSON_FENCE.match(body)
     if m:
@@ -1420,7 +1423,10 @@ def json_tool_call(body: str, schemas: dict) -> ToolCall | None:
         obj = json.loads(body)
     except ValueError:
         return None
-    if not isinstance(obj, dict) or not isinstance(obj.get("name"), str) or obj["name"] not in schemas:
+    if not isinstance(obj, dict) or not isinstance(obj.get("name"), str):
+        return None
+    name = aliases.get(obj["name"], obj["name"]) if aliases else obj["name"]
+    if name not in schemas:
         return None
     args = obj.get("arguments", obj.get("parameters", {}))
     if isinstance(args, str):
@@ -1430,7 +1436,7 @@ def json_tool_call(body: str, schemas: dict) -> ToolCall | None:
             return None
     if args is None:
         args = {}
-    return ToolCall(name=obj["name"], arguments=args) if isinstance(args, dict) else None
+    return ToolCall(name=name, arguments=args) if isinstance(args, dict) else None
 
 
 LENIENT_MAX = 1 << 20           # the longest value lenient_json will try (it is a python loop)
@@ -2880,11 +2886,12 @@ class OutputParser:
                 self.state = "call"
             elif self.state == "json":
                 # recover: `{"name": ..., "arguments": {...}}` inside the wrapper is the call once its </tool_call> has
-                # arrived and it names a declared tool; anything else is the text it is
+                # arrived and it names a declared tool (or a spelling of one: the parser's aliases, as `<function=`);
+                # anything else is the text it is
                 i = self.buf.find(CALL_END)
                 if i < 0:
                     return out
-                call = json_tool_call(self.buf[:i].strip(), self.schemas)
+                call = json_tool_call(self.buf[:i].strip(), self.schemas, self.aliases)
                 if call is None:
                     out.append(Event("content", self._track(CALL_START + self.buf[:i + len(CALL_END)])))
                 else:

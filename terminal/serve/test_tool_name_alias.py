@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serve.frontend import OutputParser  # noqa: E402
+from serve.frontend import JsonOutputParser, OutputParser  # noqa: E402
 from serve.responses import Assembler, request_tools  # noqa: E402
 
 REQ = {
@@ -209,6 +209,69 @@ def run_parser(text, tools, width=0):
         evs += parser.feed(text[k:k + step])
     evs += parser.finish("stop")
     return evs, parser
+
+
+def json_call_text(name, arguments=None):
+    """The JSON form of a call (`<tool_call>{"name": ..., "arguments": {...}}</tool_call>`): what Inkling-2-Mini's
+    `content_invoke_tool_json` channel and the Qwen3 / Hermes templates write."""
+    args = {"url": "https://example.com"} if arguments is None else arguments
+    return "<tool_call>\n" + json.dumps({"name": name, "arguments": args}) + "\n</tool_call>"
+
+
+def run_json_parser(raw, tools, width=0, kind="json"):
+    """The events of `raw`, fed `width` characters at a time, read by the JSON form's own parser ("json") or by the
+    recovery path of a template that documents the XML form ("recover", the server's default since 0.2.8)."""
+    cls, extra = (JsonOutputParser, {}) if kind == "json" else (OutputParser, {"recover": True})
+    parser = cls(thinking=False, tools=tools, stream_tools=True, declared_only=True, **extra)
+    evs = []
+    step = width or len(raw) or 1
+    for k in range(0, len(raw), step):
+        evs += parser.feed(raw[k:k + step])
+    return evs + parser.finish("stop"), parser
+
+
+class JsonFormNames(unittest.TestCase):
+    """The JSON body carries a name the same way `<function=` does, so it reads the same spellings of a declared name.
+
+    Recorded 11-25: the app declares every MCP tool as `mcp__files__write_file`; Inkling-2-Mini wrote
+    `{"name": "files__write_file", "arguments": {...}}` - a perfectly good call - and the JSON body was checked
+    against the declared names themselves, so nothing resolved it: the person got the raw `<tool_call>` markup in the
+    answer and the file was never written.  A name that matches nothing still stays text (#3075)."""
+    TOOLS = [plain_tool("web_fetch"), plain_tool("memory"), plain_tool("mcp__files__write_file")]
+    KINDS = ("json", "recover")
+
+    def calls(self, written, tools=None, width=0):
+        out = []
+        for kind in self.KINDS:
+            evs, parser = run_json_parser("Writing it.\n" + json_call_text(written), tools or self.TOOLS, width, kind)
+            out.append((kind, [e.call for e in evs if e.kind == "tool_call"], evs, parser))
+        return out
+
+    def test_the_prefix_and_the_server_are_spellings_of_the_declared_tool(self):
+        for written in ("mcp__files__write_file", "files__write_file", "mcp__write_file", "mcp_files_write_file",
+                        "write_file"):
+            for width in (0, 3):
+                for kind, found, evs, _parser in self.calls(written, width=width):
+                    with self.subTest(written=written, width=width, kind=kind):
+                        self.assertEqual([c.name for c in found], ["mcp__files__write_file"])
+                        self.assertEqual(found[0].arguments, {"url": "https://example.com"})
+                        self.assertEqual(text_of(evs).strip(), "Writing it.")
+
+    def test_a_name_that_matches_nothing_stays_text(self):
+        for written in ("mcp__flies__write_file", "files__delete_file"):
+            for kind, found, evs, _parser in self.calls(written):
+                with self.subTest(written=written, kind=kind):
+                    self.assertEqual(found, [])
+                    self.assertEqual(text_of(evs), "Writing it." + json_call_text(written))
+
+    def test_the_arguments_are_read_as_they_are_written(self):
+        args = {"path": "D:\\entity\\TODO\\plan.md", "content": "# Plan\n```\nD:\\entity\n```\n", "lines": [1, 2]}
+        for kind in self.KINDS:
+            evs, _parser = run_json_parser("Writing it.\n" + json_call_text("files__write_file", args),
+                                           self.TOOLS, 0, kind)
+            found = [e.call for e in evs if e.kind == "tool_call"]
+            with self.subTest(kind=kind):
+                self.assertEqual(found[0].arguments, args)
 
 
 class CollapsedUnderscoreNames(unittest.TestCase):

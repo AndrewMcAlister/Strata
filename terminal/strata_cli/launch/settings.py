@@ -18,7 +18,10 @@ from typing import Any
 SCHEMA = "strata.launch/1"
 
 #: setup.py's CONTEXTS (kept here only as the fallback when the installer files are not next to this terminal).
-FALLBACK_CONTEXTS = (8192, 32768, 65536, 131072, 204800, 262144, 393216, 524288)
+FALLBACK_CONTEXTS = (65536, 131072, 204800, 262144, 393216, 524288)
+#: setup.py's and strata_control/default_context.py's MIN_CONTEXT: the smallest conversation memory a model is offered (64K).  It is a rule of
+#: the catalog the picker reads, and the size is handed to the engine as --max-context: the engine has no floor of its own.
+MIN_CONTEXT = 65536
 
 ACCESS_KINDS = ("local", "lan", "address", "cloudflare", "tailscale")
 #: Where the picture reader runs, in the words the plan, the summary and the running-server line all use (#0221 APPTUI: the plan said "the reader runs on the processor", the running line "pictures gpu").
@@ -92,11 +95,12 @@ def parse_context(text: Any) -> int:
     raw = str(text).strip().lower().replace(" ", "").replace("_", "").replace(",", "")
     m = re.fullmatch(r"(\d+(?:\.\d+)?)(k|m)?", raw)
     if not m:
-        raise ValueError(f"'{text}' is not a context size. Use a number of tokens or a size such as 32k, 64k, 128k, 256k.")
+        raise ValueError(f"'{text}' is not a context size. Use a number of tokens or a size such as 64k, 128k, 256k.")
     value = float(m.group(1)) * {"k": 1024, "m": 1024 * 1024, None: 1}[m.group(2)]
     n = int(round(value))
     if n < 1024:
-        raise ValueError(f"A context of {n} tokens is too small to be useful; the smallest size offered is 8k.")
+        raise ValueError(f"A context of {n} tokens is too small to be useful; the smallest size the picker offers is "
+                         f"{context_label(MIN_CONTEXT)} ({MIN_CONTEXT:,} tokens).")
     return n
 
 
@@ -347,6 +351,11 @@ def check_parallel(s: LaunchSettings, *, vram_gb: float | None, fitted: int | No
 
 def check_context(s: LaunchSettings, *, max_fit_tokens: int | None = None) -> list[Notice]:
     out: list[Notice] = []
+    if s.context is not None and s.context < MIN_CONTEXT:
+        # An explicit --context, or a preset saved before 2026-11-25: kept as chosen (recommend, never force), with what it costs.
+        out.append(Notice("warn", f"{context_label(s.context)} is below the smallest size the picker offers ({context_label(MIN_CONTEXT)}).",
+                          "The agent compacts the conversation just before the model runs out of room, and the compaction is ordered from "
+                          "the window: a smaller one leaves it almost no room. 64K is the smallest size offered, 128K the usual one."))
     if s.context is not None and s.context > 262144:
         out.append(Notice("warn", f"{context_label(s.context)} is more than the model was trained on (256K).",
                           "Setup adds rope scaling for it (experimental); answers may get less reliable."))

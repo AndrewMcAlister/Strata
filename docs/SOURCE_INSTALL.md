@@ -192,12 +192,12 @@ amount of time and should use the same hardware and model configuration as the i
 Run the relevant wrapper with `--help` for the complete options on that operating system. Common source examples:
 
 ```bat
-START-HERE.bat --family qwen --model IQ3_XXS --context 32768 --vision no
+START-HERE.bat --family qwen --model IQ3_XXS --context 65536 --vision no
 START-HERE.bat --setup
 ```
 
 ```bash
-./setup.sh --family qwen --model IQ3_XXS --context 32768 --vision no
+./setup.sh --family qwen --model IQ3_XXS --context 65536 --vision no
 ./setup.sh --no-start
 ```
 

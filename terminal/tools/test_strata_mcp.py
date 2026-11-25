@@ -826,9 +826,9 @@ class Helpers(unittest.TestCase):
             self.assertNotIn(flag, args)
         plan, _a = M.Tools(s).install_plan("qwen36", None, 32768, "no", None, None, None, None, None, None, None)
         self.assertEqual(plan["model"], "UD-Q4_K_XL")
-        # #5715: no context given: the size that fits the 12 GB card (32K), not 128K; a 16 GB card keeps 128K
+        # #5715: no context given: the largest size that fits the 12 GB card, never under the 64K floor (default_context.MIN_CONTEXT); a 16 GB card keeps 128K
         _p, args = M.Tools(s).install_plan("qwen36", "UD-Q4_K_XL", None, "no", None, None, None, None, None, None, None)
-        self.assertEqual(args[args.index("--context") + 1], "32768")
+        self.assertEqual(args[args.index("--context") + 1], "65536")
         s.hardware = lambda fresh=False: {"ram_gb": 64.0, "gpus": [{"index": 0, "name": "x", "vram_gb": 15.93, "usable": True, "vendor": "nvidia"}],
                                           "cpu": {"avx2": True}}
         _p, args = M.Tools(s).install_plan("qwen36", "UD-Q4_K_XL", None, "no", None, None, None, None, None, None, None)
@@ -934,7 +934,8 @@ class MacCatalog(unittest.TestCase):
         self.assertFalse(hw["nvidia_smi"])
 
     def test_recommendation_by_unified_memory(self):
-        cases = {32: ("Q2_0", 32768), 48: ("Q2_0", 32768), 80: ("IQ3_XXS", 32768), 128: ("IQ3_S", 65536)}
+        # every Mac opens at 64K now: the 64K floor (strata_control/default_context.py MIN_CONTEXT) is the smallest size offered
+        cases = {32: ("Q2_0", 65536), 48: ("Q2_0", 65536), 80: ("IQ3_XXS", 65536), 128: ("IQ3_S", 65536)}
         for ram, (model, ctx) in cases.items():
             s, hw = self.hw(ram)
             r = s.recommend(hw)
@@ -994,8 +995,8 @@ class MacCatalog(unittest.TestCase):
         s.disk_free = lambda p: 1000.0
         with tempfile.TemporaryDirectory() as own:
             plan, args = M.Tools(s).install_plan("qwen", "Q2_0", None, "no", "int8", 0, None, None, "auto", None, None, own)
-        self.assertEqual(plan["context"], 32768)
-        self.assertEqual(args[:9], ["--yes", "--no-start", "--family", "qwen", "--model", "Q2_0", "--context", "32768", "--vision"])
+        self.assertEqual(plan["context"], 65536)        # the 64K floor: a 32 GB Mac used to be offered 32K
+        self.assertEqual(args[:9], ["--yes", "--no-start", "--family", "qwen", "--model", "Q2_0", "--context", "65536", "--vision"])
         for flag in ("--kv", "--gpu", "--gpus", "--low-ram", "--backend"):
             self.assertNotIn(flag, args)
         self.assertIn("--gguf-dir", args)

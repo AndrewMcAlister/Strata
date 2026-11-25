@@ -34,7 +34,7 @@ BASE_GIB = 8.55                                                # the one figure 
 HYBRID_MIN_GIB = {"UD-Q4_K_XL": 1256 / 1024, "UD-Q6_K_XL": 1760 / 1024, "Q8_0": 1760 / 1024}
 FAMILY_NAME = "qwen3.6-35b-a3b"                                # setup.py OWN_PATH_FAMILIES['qwen36']['name'], the config's model_name prefix
 DEFAULT_CONTEXT = 131072                                       # 128K (owner, 2026-11-01): the mark never goes above it
-MENU = [8192, 32768, 65536, 131072, 204800, 262144]           # setup's own-path context menu (setup.own_path_contexts(); a test keeps them equal)
+MENU = [65536, 131072, 204800, 262144]                         # setup's own-path context menu (setup.own_path_contexts(); a test keeps them equal): 64K and up, the floor of strata_control/default_context.py
 
 
 def fixed_gib(model: str | None) -> float | None:
@@ -95,11 +95,14 @@ def label(ctx: int) -> str:
 
 
 def warning(fit: dict | None, vram_gb: float | None, ctx: int, choices) -> str | None:
-    """The sentence said before the start when `ctx` does not fit the card (owner's wording, 11-10/11-11), else None.  Nothing is said when no
-    choice fits at all (the sentence needs a size that fits) or when it cannot be said."""
+    """The sentence said before the start when `ctx` does not fit the card (owner's wording, 11-10/11-11), else None.  When not even the
+    smallest choice fits, the sentence says that instead of naming a size: with the 64K floor (strata_control/default_context.py) a card can be
+    left with no size that fits.  Nothing is said when it cannot be said (no figures, no card)."""
     best = largest_fit(fit, vram_gb, choices)
-    if not best or fits(fit, float(vram_gb), int(ctx)):
+    if best is None or fits(fit, float(vram_gb), int(ctx)):
         return None
-    return (f"At {label(int(ctx))}, this model's conversation memory needs about {int(ctx) * float(fit['bytes_per_token']) / GIB:.1f} GB of graphics memory. With the model "
-            f"itself that is more than this card's {float(vram_gb):.0f} GB, so it will probably not start. {label(best)} fits on this card: choose "
-            f"{label(best)} or less.")
+    head = (f"At {label(int(ctx))}, this model's conversation memory needs about {int(ctx) * float(fit['bytes_per_token']) / GIB:.1f} GB of graphics memory. With the model "
+            f"itself that is more than this card's {float(vram_gb):.0f} GB, so it will probably not start. ")
+    if best:
+        return head + f"{label(best)} fits on this card: choose {label(best)} or less."
+    return head + f"Not even {label(min(int(c) for c in choices))}, the smallest size offered, fits this card."

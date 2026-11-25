@@ -38,8 +38,9 @@ UMA_RESERVE_GB = 5.00            # unified memory OS + driver reserve
 SSD_NEAR_RESIDENT_GB = 2.0
 VISION_GB = 0.637                # Inkling-2-Mini-Vision.strata (636,526,592 B, CPU / on-demand on <=12 GiB GPUs)
 DSPARK_GGUF_GB = 0.636           # the drafter file of a GGUF build: mtp.safetensors (635,801,416 B, BF16, the default); Unsloth's Q8_0 copy is 0.402 GB (small cards, fallback)
-DEFAULT_CONTEXT = 32768          # docs/10-GUI-TUI.md default: 32K (up to 1M available)
-CONTEXTS = [8192, 32768, 65536, 131072, 262144]
+DEFAULT_CONTEXT = 65536          # the context Inkling opens with: 64K, the smallest size the picker offers (strata_control/default_context.py MIN_CONTEXT;
+                                 # it was 32K, docs/10-GUI-TUI.md, up to 1M available)
+CONTEXTS = [65536, 131072, 262144]   # the sizes the picker offers: 64K and up (strata_control/default_context.py MIN_CONTEXT)
 MAX_CONTEXT = 1048576
 DEFAULT_PARALLEL = 1
 PARALLEL_CHOICES = (1, 4, 8, 32, 64)

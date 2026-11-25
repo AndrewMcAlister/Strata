@@ -29,6 +29,17 @@ class SettingsRules(unittest.TestCase):
         with self.assertRaises(ValueError):
             S.parse_context("100")
 
+    def test_a_context_under_the_floor_is_kept_with_a_warning(self):
+        # strata_control/default_context.py MIN_CONTEXT: the picker's sizes start at 64K, and a number typed by hand (or saved by an
+        # older preset) is kept with what it costs, never refused (recommend, never force)
+        self.assertEqual(S.MIN_CONTEXT, 65536)
+        self.assertEqual(S.FALLBACK_CONTEXTS[0], S.MIN_CONTEXT)
+        small = S.check_context(S.LaunchSettings(family="qwen", model="IQ3_XXS", context=32768))
+        self.assertEqual([n.level for n in small], ["warn"])
+        self.assertIn("32K is below the smallest size the picker offers (64K).", small[0].text)
+        self.assertIn("128K the usual one", small[0].next)
+        self.assertEqual(S.check_context(S.LaunchSettings(family="qwen", model="IQ3_XXS", context=S.MIN_CONTEXT)), [])
+
     def test_fit_parallel_follows_the_spec(self):
         self.assertEqual([S.fit_parallel(v) for v in (8, 12, 16, 20, 24, 32, 48)], [1, 1, 1, 2, 3, 4, 4])
         self.assertEqual(S.fit_parallel(None), 1)
@@ -153,7 +164,7 @@ class CatalogRules(unittest.TestCase):
             self.assertEqual((rows["Q2_0"].verdict, rows["Q2_0"].words), ("slower", "may run slower"))
             self.assertEqual(rows["IQ3_S"].verdict, "slower")
             self.assertGreater(rows["IQ3_S"].spill_gb, 10)
-            self.assertEqual(cat.max_context("qwen", "Q2_0", hw), 32768)
+            self.assertEqual(cat.max_context("qwen", "Q2_0", hw), 65536)      # a Mac under 96 GB opened at 32K before the 64K floor
             self.assertEqual(cat.computer().line(), "Apple M4 · 32 GB unified memory · " + cat.computer().line().split(" · ")[-1])
             # no "0 GB" of video memory in the card part of the line (the free-disk figure after it may end in a zero: "60 GB free")
             self.assertNotIn("0 GB", " · ".join(cat.computer().line().split(" · ")[:2]))
@@ -194,6 +205,29 @@ class CatalogRules(unittest.TestCase):
             self.assertLess(cat.kv_gb(131072, "q4_0"), cat.kv_gb(131072, "int8"))
             self.assertEqual(cat.max_context("qwen", "IQ3_XXS", HW_12), 131072)      # 128K on every card (owner, 2026-11-01)
             self.assertEqual(cat.max_context("qwen", "IQ3_XXS", HW_24), 131072)
+
+    def test_every_picker_offers_nothing_under_64k(self):
+        # strata_control/default_context.py MIN_CONTEXT: 8K and 32K left the agent's compaction no room, so no menu offers them
+        from strata_control import default_context, hy4_family, inkling_family, mac_fit, own_path_fit
+        floor = default_context.MIN_CONTEXT
+        self.assertEqual(floor, 65536)
+        with Home():
+            cat = catalog()
+            for fam in (None, "qwen", "swift", "hy4-flash", "inkling-2-mini"):
+                self.assertGreaterEqual(min(cat.contexts_for(fam)), floor, fam)
+                self.assertEqual(cat.contexts_for(fam), sorted(cat.contexts_for(fam)), fam)
+            for menu in (cat.contexts(), hy4_family.CONTEXTS, inkling_family.CONTEXTS, mac_fit.CONTEXTS, own_path_fit.MENU):
+                self.assertGreaterEqual(min(menu), floor, menu)
+            self.assertEqual(default_context.offered([8192, 32768]), [floor])       # a list under the floor comes back as the floor
+            self.assertIn(floor, default_context.offered([8192, 65536, 131072]))
+            # every default the setup menus preselect is in its own list (the Inkling menu crashed on a default 32K size once the list
+            # started at 64K) and at or above the floor
+            for default, menu in ((hy4_family.DEFAULT_CONTEXT, hy4_family.CONTEXTS),
+                                  (inkling_family.DEFAULT_CONTEXT, inkling_family.CONTEXTS),
+                                  (own_path_fit.DEFAULT_CONTEXT, own_path_fit.MENU),
+                                  (mac_fit.recommend_context(32.0), mac_fit.CONTEXTS)):
+                self.assertGreaterEqual(default, floor, menu)
+                self.assertIn(default, menu, menu)
 
     def test_missing_installer_files_are_said_in_words(self):
         with Home():

@@ -47,7 +47,7 @@ and test-starts it before using it.
 3. **Folder:** where model files are stored, with free space. For a model that is already installed, including one the
    desktop app installed, it starts where the model is and lists only what is missing (the draft layer, about 5.2 GB; the
    picture reader, 0.9 GB).
-4. **Context** (8K to 512K, with the extra memory each costs) and the memory format (`m`: 8-bit or 4-bit).
+4. **Context** (64K to 512K, with the extra memory each costs) and the memory format (`m`: 8-bit or 4-bit).
 5. **Pictures:** only for models that can read them. They are on by default (`--vision off` or "No" turns them off). The
    reader adds about 0.9 GB. It runs on the CPU for a card under 24 GB and on the graphics card from 24 GB (about 1 to 1.4 GB kept
    free). The rule is in `terminal/strata_control/vision_reader.py`. `--vision gpu` or `--vision cpu` overrides it per model. If the
@@ -90,7 +90,7 @@ strata launch --show-key
 | `--family`, `--model` | The model family and size, for example `qwen`, `q2_0`. Any case. |
 | `--model-path PATH` | Use model files you already have: a folder of shards or one `.gguf`. |
 | `--data-dir DIR`, `--move-data` | Where new downloads go. `--move-data` also moves the models you already have. |
-| `--context SIZE` | `32k`, `64k`, `128k`, `256k` or a number of tokens. |
+| `--context SIZE` | `64k`, `128k`, `256k` or a number of tokens. 64K is the smallest size the picker offers; a smaller number is kept with a warning. |
 | `--kv FORMAT` | Conversation memory format: `int8` (default), `q4_0` (half the memory), `k8v4`, `fp16`. |
 | `--vision off\|on\|gpu\|cpu` | Picture reading. Default: on when the model and the engine can. |
 | `--parallel N` | Requests answered at the same time, 1 to 64. Inkling-2-Mini runs up to 64; the Qwen engine keeps 16 on NVIDIA and AMD cards and 8 elsewhere (a layer split over several cards can run more); Hy4-Flash answers one. Launch says in plain words when a family or a card cannot hold N (Inkling: when the slots do not fit the card at the chosen context, or leave less of the model in graphics memory). Default: fit to your card; one at a time with DFlash2 (the Auto drafter where the engine has it). |

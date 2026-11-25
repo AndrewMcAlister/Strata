@@ -145,7 +145,7 @@ MEMORY_TIERS = ((46.0, "qwen", "IQ3_XXS"), (38.0, "swift", "IQ2_XS"))   # as set
 # #3425 (owner's rule, same as setup.py's TIER_SYSTEM_RESERVE_GB): the floors count RAM + VRAM less the 5 GB Windows and the system keep
 TIER_SYSTEM_RESERVE_GB = 5.0
 GYRO_ROOM_GB = 4.0     # recommend() suggests a Gyro size only when VRAM + RAM exceed its memory figure by this much
-FALLBACK_CONTEXTS = [8192, 32768, 65536, 131072, 204800, 262144, 393216, 524288]
+FALLBACK_CONTEXTS = [65536, 131072, 204800, 262144, 393216, 524288]      # setup.py's CONTEXTS: 64K is the floor (strata_control/default_context.py MIN_CONTEXT)
 BENCH_PROMPT = ("Write a short story (about 300 words) about a lighthouse keeper who finds a message in a bottle. "
                 "Plain prose, no title.")
 
@@ -2213,6 +2213,9 @@ MODEL_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,48}"
 def tool_defs(models: dict, families: dict, contexts: list) -> list:
     port = {"type": "integer", "minimum": 1024, "maximum": 65535,
             "description": "the server's port (default: the installed model's port, usually 8080)"}
+    # The smallest context a model is offered (setup.py's CONTEXTS, the floor of strata_control/default_context.py): the schema refuses a
+    # smaller one the way the menu never shows it, and the size is passed to the engine as --max-context.
+    context_floor = min(contexts) if contexts else FALLBACK_CONTEXTS[0]
     installed_model = {"type": "string", "pattern": MODEL_ID_PATTERN, "maxLength": 49,
                        "description": "an installed model's id as strata_status lists it (e.g. 'q2_0', "
                                       "'coder-iq1_m', 'swift-iq3_xxs'); default: the most recently used one"}
@@ -2259,9 +2262,11 @@ def tool_defs(models: dict, families: dict, contexts: list) -> list:
                                        "from the SSD"},
              "model": {"type": "string", "enum": list(models),
                        "description": "the size (quantization): see strata_models"},
-             "context": {"type": "integer", "minimum": 1024, "maximum": 2097152, "examples": contexts,
-                         "description": "context length in tokens (more needs more VRAM). Any whole number works, "
-                                        "for example one typed into a model's run config by hand; the usual sizes are "
+             "context": {"type": "integer", "minimum": context_floor, "maximum": 2097152, "examples": contexts,
+                         "description": "context length in tokens (more needs more VRAM). The sizes offered start at "
+                                        f"{context_floor} (64K): a smaller window leaves an agent's own compaction "
+                                        "no room. Any whole number at or above it works, for example one typed "
+                                        "into a model's run config by hand; the usual sizes are "
                                         f"{', '.join(str(c) for c in contexts)}"},
              "vision": {"type": "string", "enum": ["no", "yes", "gpu", "cpu"],
                         "description": "let the model read images (~0.9 GB more download). Default yes where the model can "

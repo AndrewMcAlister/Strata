@@ -114,7 +114,7 @@ class Context(unittest.TestCase):
 
     def test_a_picked_256k_is_kept_and_the_menu_says_the_risk(self):
         code, out, cfg, asked = install(self.RAM64, self.GPU32, ["--family", "qwen", "--model", "IQ3_S", "--no-start"],
-                                        answers={"Context?": "6"})
+                                        answers={"Context?": "4"})
         self.assertEqual(code, 0, out)
         self.assertEqual(arg(cfg, "--max-context"), "262144")
         self.assertIn("256K tokens   (needs ~78 GB RAM, this PC has 64: may run out of memory)", out)
@@ -125,7 +125,7 @@ class Context(unittest.TestCase):
         """#406: 200K was added between the 128K rule and 256K - it is inside the trained 262144, so no rope scaling,
         and a pick of it is kept with the note 256K gets instead of being capped to 128K."""
         code, out, cfg, _ = install(self.RAM64, self.GPU32, ["--family", "qwen", "--model", "IQ3_S", "--no-start"],
-                                    answers={"Context?": "5"})
+                                    answers={"Context?": "3"})
         self.assertEqual(code, 0, out)
         self.assertEqual(arg(cfg, "--max-context"), "204800")
         self.assertNotIn("--rope-scaling", cfg["args"])

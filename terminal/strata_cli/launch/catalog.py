@@ -453,14 +453,16 @@ class Catalog:
         return [int(c) for c in self.tables()[2]]
 
     def contexts_for(self, family: str | None, model: str | None = None) -> list[int]:
-        """The context sizes to offer for this model: Hy4-Flash's own list (8K..128K), else the shared list."""
+        """The context sizes to offer for this model: Hy4-Flash's own list, Inkling-2-Mini's own, else the shared list, and never under
+        strata_control/default_context.py MIN_CONTEXT (64K) whatever a table says."""
+        from strata_control import default_context
         if family == "hy4-flash":
             from strata_control import hy4_family
-            return list(hy4_family.CONTEXTS)
+            return default_context.offered(hy4_family.CONTEXTS)
         if family == "inkling-2-mini":
             from strata_control import inkling_family
-            return list(inkling_family.CONTEXTS)
-        return self.contexts()
+            return default_context.offered(inkling_family.CONTEXTS)
+        return default_context.offered(self.contexts())
 
     def recommendation(self, hw: dict | None = None) -> dict:
         return self.strata.recommend(hw or self.hardware())

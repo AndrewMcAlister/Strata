@@ -240,10 +240,11 @@ class TestUnlock4GbAndIssue6587(unittest.TestCase):
         self.assertEqual(h4["vram_gb"], 0.0)
         self.assertGreater(h4["ram_gb"], 40.0)
 
-        # 5. Qwen3.6-35B-A3B (own_path_fit) on 4 GB GPU: recommends smallest context, never refuses
+        # 5. Qwen3.6-35B-A3B (own_path_fit) on 4 GB GPU: recommends the smallest context offered (the 64K floor), never refuses
         fit36 = own_path_fit.inputs("qwen3.6-35b-a3b", "UD-Q4_K_XL")
-        self.assertEqual(own_path_fit.recommended(fit36, 4.0, own_path_fit.MENU), 8192)
-        self.assertIsNone(own_path_fit.warning(fit36, 4.0, 8192, own_path_fit.MENU))
+        self.assertEqual(own_path_fit.recommended(fit36, 4.0, own_path_fit.MENU), 65536)
+        self.assertTrue(own_path_fit.warning(fit36, 4.0, 65536, own_path_fit.MENU).endswith(
+            "Not even 64K, the smallest size offered, fits this card."))
 
         # 6. Local import maps Unsloth GGUF filename to its exact catalog build
         self.assertEqual(models._inkling_build_for_bytes(9_138_715_328, "Inkling-2-Mini-UD-Q2_K_XL.gguf"), "UD-Q2_K_XL")

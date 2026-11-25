@@ -64,7 +64,7 @@ These are choices, not an instruction to install every row. The full list and me
 [MODELS.md](MODELS.md). For example, inspect the ISTA-DASLab Q2_0 plan:
 
 ```sh
-strata launch --family qwen --model q2_0 --context 32k --plan --output json
+strata launch --family qwen --model q2_0 --context 64k --plan --output json
 ```
 
 Check the resolved family, model, storage folder, context, picture reader and missing downloads. If the plan names
@@ -76,7 +76,7 @@ engine, but model preparation still has special requirements: [INTEL_ARC.md](INT
 After the plan matches the user's computer and requested setup:
 
 ```sh
-strata launch --family qwen --model q2_0 --context 32k --yes --no-tui
+strata launch --family qwen --model q2_0 --context 64k --yes --no-tui
 ```
 
 `--no-tui` prints the address and returns after startup while the server continues in the background. Keep the

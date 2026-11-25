@@ -683,7 +683,7 @@ applies at the next start. Network, key, MCP and program keys are not editable t
 
 ### Context and limits
 
-- Context is chosen in setup (8K-262K). Requests longer than that are refused, never cut silently.
+- Context is chosen in setup (64K-262K). Requests longer than that are refused, never cut silently.
 - `max_tokens`, `max_completion_tokens` and `max_output_tokens` of `-1`, `0` or left out mean no cap: the answer may use the room
   left in the context.
 - The `model` field is not matched against the loaded model, because one server serves one model and OpenAI clients often

@@ -94,7 +94,7 @@ GPU_SHARE = 0.75
 RESIDENT_LEAVE_SHARE = 0.30
 BIG_MAC_GB = 64.0
 GIB_GB = 1.073741824    # a GiB in GB: ram_gb is binary, the model sizes are decimal
-CONTEXTS = [8192, 32768, 65536, 131072]
+CONTEXTS = [65536, 131072]      # the sizes the picker offers: 64K and up (strata_control/default_context.py MIN_CONTEXT)
 MAC_ABOUT = {"UD-IQ1_M": "~1-bit (Unsloth Dynamic v3.1), the smallest download",
              "UD-Q2_0": "2-bit (Unsloth Dynamic v3.1)",
              "UD-IQ2_XS": "2-bit i-quant (Unsloth Dynamic v3.1)",
@@ -252,7 +252,9 @@ def model_note(model: str, ram_gb: float) -> list[str]:
 
 
 def recommend_context(ram_gb: float) -> int:
-    return 32768 if ram_gb < 96 else 65536
+    """The context a Mac opens with: 64K, the smallest size the pickers offer (strata_control/default_context.py MIN_CONTEXT).  A Mac under
+    96 GB used to open at 32K, a size the floor no longer offers."""
+    return 65536
 
 
 def stream_mtp(stream: bool, ram_gb: float) -> bool:

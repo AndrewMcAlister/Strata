@@ -89,6 +89,23 @@ class TestInklingDialect(unittest.TestCase):
         calls = [ev.call for ev in events if ev.kind == "tool_call" and ev.call is not None]
         self.assertEqual([c.arguments["path"] for c in calls], ["a.py", "b.py"])
 
+    def test_a_tool_name_shortened_of_its_mcp_prefix_is_that_tool(self):
+        """11-25: the app declares every MCP tool as `mcp__files__write_file`, so that is the name in the tool list the
+        model reads.  Inkling-2-Mini wrote the shortened `files__write_file` in its JSON channel; the name was checked
+        against the declared names alone, the call was not found, and the person got the raw `<tool_call>` markup in the
+        answer with the file never written."""
+        payload = json.dumps({"name": "files__write_file",
+                              "args": {"path": "D:\\entity\\TODO\\plan.md", "content": "# Plan\n```\nD:\\entity\n```\n"}})
+        raw = (f"<|message_model|>files__write_file<|content_invoke_tool_json|>{payload}<|end_message|>"
+               "<|content_model_end_sampling|>")
+        p = frontend.InklingOutputParser(tools=[{"name": "mcp__files__write_file", "parameters": {"type": "object"}}])
+        events = p.feed(raw) + p.finish("stop")
+        calls = [ev.call for ev in events if ev.kind == "tool_call" and ev.call is not None]
+        self.assertEqual([c.name for c in calls], ["mcp__files__write_file"])          # the client gets the name it declared
+        self.assertEqual(calls[0].arguments["path"], "D:\\entity\\TODO\\plan.md")
+        self.assertEqual(calls[0].arguments["content"], "# Plan\n```\nD:\\entity\n```\n")
+        self.assertEqual("".join(ev.text for ev in events if ev.kind == "content"), "")
+
     def test_the_thinking_levels_reach_the_template_as_designed(self):
         # none / 0 / enable_thinking false = level 0; low, medium, high, ... go through (like robertkarl/UnbiasedStrata); None = the default level
         for level in ("none", "off", "no_think", "disabled", False, 0, 0.0, "0"):

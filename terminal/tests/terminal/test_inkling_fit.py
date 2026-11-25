@@ -41,7 +41,7 @@ class TestInklingFitAndHardwareSelection(unittest.TestCase):
         self.assertEqual(rec_16["build"], "SQ-15")
         self.assertEqual(rec_16["mode"], "ram_vram_zero_ssd")
         self.assertTrue(rec_16["fits"])
-        self.assertLessEqual(rec_16["placement"]["vram_gb"], 10.6)
+        self.assertLessEqual(rec_16["placement"]["vram_gb"], 13.0)     # 12.11 GB at the 64K default (10.3 at the 32K it used to open with)
         rec_16_cuda = inkling_fit.recommend(vram_gib=16, ram_gib=32, backend="cuda", preference="balanced")
         self.assertEqual(rec_16_cuda["build"], "SQ-15")
         self.assertEqual(rec_16_cuda["mode"], "full_vram")
@@ -84,7 +84,8 @@ class TestInklingFitAndHardwareSelection(unittest.TestCase):
 
         rec_mac16 = inkling_fit.recommend(vram_gib=None, ram_gib=16, unified=True)
         self.assertEqual(rec_mac16["build"], "SQ-10")
-        self.assertTrue(rec_mac16["fits"])
+        self.assertEqual(rec_mac16["mode"], "near_resident_ssd")      # at the 64K default a 16 GiB Mac streams it (32K stayed resident)
+        self.assertFalse(rec_mac16["fits"])
 
         # AMD Radeon 780M (gfx1103) with small 2 GiB BIOS carve-out + 32 GiB RAM -> SQ-10 via coherent UMA
         rec_780m = inkling_fit.recommend(vram_gib=2, ram_gib=32, arch="gfx1103")

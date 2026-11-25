@@ -718,7 +718,10 @@ UNSLOTH_MIN_RAM_GB = 48         # the RAM-budget mode below which setup says an 
 # the trained range are out of spec.
 # 204800 (200K) sits between 128K and 256K: it is inside the trained 262144, so it needs no rope scaling and
 # costs ~2.8 GB of 8-bit KV with IQ3_S (vs ~3.6 GB at 256K) - a middle step for PCs that cannot hold 256K.
-CONTEXTS = [8192, 32768, 65536, 131072, 204800, 262144, 393216, 524288]
+# The sizes the context picker offers.  64K is the floor of every model (strata_control/default_context.py MIN_CONTEXT): 8K and 32K left the
+# agent's own compaction no room before the window ended.  The size a person picks here is handed to the engine as --max-context
+# (engine_args below, strata_cli/launch/runner.py), so the floor is a rule of this catalog and never of the engine.
+CONTEXTS = [65536, 131072, 204800, 262144, 393216, 524288]
 # The model families: the same architecture, weights in the same three GSQ-RCO sizes, different files.
 FAMILIES = {
     "qwen": {"title": "Qwen3.8-Flash-Next", "by": "Qwen; GSQ-RCO quants by ISTA-DASLab",

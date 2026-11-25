@@ -997,7 +997,7 @@ class ContextScreen(Base):
         s = self.ctx.settings
         cat = self.ctx.catalog
         fam, model = s.family, s.model
-        self.rec = cat.max_context(fam, model, self.ctx.computer.raw) if fam and model else 32768
+        self.rec = cat.max_context(fam, model, self.ctx.computer.raw) if fam and model else S.MIN_CONTEXT
         if s.context is None:
             s.context = self.rec
         self.build()

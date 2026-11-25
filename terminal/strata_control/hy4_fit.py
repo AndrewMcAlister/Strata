@@ -47,7 +47,7 @@ ENGRAM_GB = 67.58                # the shared Engram shard, on the SSD (needs a 
 VISION_GB = 0.934                # Hy4-Flash-Vision.strata (934,092,800 B): in the default download set; loaded on demand, so its memory is reserved in RAM only when images are on
 AUTHOR_CONTEXT = 20480           # the context the author's 2.00 GB (and his 7 cases) are made for
 DEFAULT_CONTEXT = 131072         # owner, 2026-11-19: 128K by default
-CONTEXTS = [8192, 32768, 65536, 131072]
+CONTEXTS = [65536, 131072]       # the sizes the picker offers: 64K and up (strata_control/default_context.py MIN_CONTEXT)
 KV_GB_PER_TOKEN = 34.7e-6        # KV + context workspace (IndexPool, workspace and Engram buffers grow with it too), per token: HY4-STRIX, Strix Halo SQ-64: (66.3 - 62.2) GiB x 1.0737 / (131072 - 4096); HY4-METAL (M5 Max): +5.0 GB from 4K to 128K, KV alone 1.9 GB of it
 DRAFTER_GB = 0.44                # the 5-layer DFly2 drafter, in Section 1 already (inside every build's dense_gb): kept here to say so, not added twice
 #: HY4-CUDA's engine decides where the Vt-free sparse-layer KV rows and IndexPool state live (plan_memory in hy4_gpu_model.hip.h): `engine_plan` below

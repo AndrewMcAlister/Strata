@@ -51,7 +51,7 @@ short version is:
    ```
 
    Useful flags (all of them: `strata launch --help`): `--family`, `--model-path` (files the user already has),
-   `--data-dir`, `--context 32k|64k|128k`, `--vision off|on|gpu|cpu`, `--parallel N`, `--gpu 0,1`,
+   `--data-dir`, `--context 64k|128k|256k`, `--vision off|on|gpu|cpu`, `--parallel N`, `--gpu 0,1`,
    `--access local|lan|cloudflare|tailscale`, `--port`, `--api-key-env NAME`, `--new-key`, `--save-preset NAME`,
    `--output json`. `strata launch --status` shows what is serving, `strata launch --stop` stops it, and
    `strata launch --show-key` prints the API key.

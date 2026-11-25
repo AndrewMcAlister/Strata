@@ -410,7 +410,7 @@ class ContextStep(Base):
         async def case(app, pilot, ctx):
             await press(pilot, "enter", "enter", "enter")
             t = text_of(app)
-            for size in ("8K", "32K", "64K", "128K", "256K", "512K", "Custom"):
+            for size in ("64K", "128K", "200K", "256K", "384K", "512K", "Custom"):     # 8K and 32K left with the 64K floor
                 self.assertIn(size, t)
             self.assertIn("about 98,000 words", t)
             self.assertIn("recommended", t)
@@ -432,7 +432,7 @@ class ContextStep(Base):
             self.assertEqual(ctx.settings.kv, "q4_0")
             t = text_of(app)
             self.assertIn("4-bit", t)
-            self.assertIn("+0.2 GB", t)                               # 32K at 4-bit
+            self.assertIn("+1.0 GB", t)                               # 128K at 4-bit: 131072 x 13 x 576 bytes
             await press(pilot, "m")
             self.assertEqual(ctx.settings.kv, "int8")
         self.run_app(case)

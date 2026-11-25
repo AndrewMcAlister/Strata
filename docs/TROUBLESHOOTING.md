@@ -139,7 +139,7 @@ memory copy that grows with the context). Without it the expert cache gets that 
 it off for one model: in the app, the model's Drafting setting in Expert settings; in the Terminal:
 
 ```sh
-strata launch --family qwen --model q2_0 --context 32k --mtp off
+strata launch --family qwen --model q2_0 --context 64k --mtp off
 ```
 
 (older Terminals: `--set mtp=off --set spec-min-p=off`); by hand, add `"mtp": false` to the model's `strata-<model>.json`.
@@ -325,8 +325,9 @@ in order, one at a time, and tell us what changed:
 3. **`"STRATA_KV_HOST_DMA": "1"`** in the same `"env"` block: no GPU kernel writes the RAM copy of the K/V during a
    prompt, it is copied by DMA instead. Same answers. On AMD and Intel Arc this is off until you set it. NVIDIA cards do it by
    default; setting it to `"0"` there goes back to the earlier way of writing.
-4. **No KV streaming:** run setup again and pick 32K context (or remove `--kv-resident` and its number from
-   `"args"` in the JSON, with a context that fits the VRAM).
+4. **No KV streaming:** remove `--kv-resident` and its number from `"args"` in the JSON, with a context that fits the
+   VRAM. Setup turns streaming on from 64K, which is the smallest size the picker offers, so a card that needs it off
+   gets a context typed by hand (`--context 32k` is kept, with a warning).
 5. **A smaller prompt chunk:** change `--prefill` in `"args"` (for example `--prefill 512`): each GPU launch then does
    less work between two checks by Windows. Prompts are read more slowly.
 6. **Optional, your decision: give Windows more time (`TdrDelay`).** The default is 2 seconds. In the registry,
