@@ -10,6 +10,7 @@ Run: python -m pytest tools/test_service.py -q
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -163,6 +164,146 @@ def test_write_conf_writes_utf8_without_a_bom(tmp_path):
     assert str(chosen).encode("utf-8") in raw
 
 
+# ------------------------------------------------------------------------------ the component folder
+#
+# A model of its own shape (Inkling-2-Mini, Hy4-Flash, a Qwen4 shape) starts an engine package from
+# <components>\shapes\<shape>\engine\, and the service - LocalSystem - has no components of its own. That is
+# what components= is for; without it "a" or "b" in the model menu served nothing at all.
+
+def component_folder(root: Path) -> Path:
+    """A folder shaped like the per-user one: engine/ for the Strata engine, shapes/<shape>/engine/ for the others."""
+    where = root / "components"
+    (where / "engine" / "0.1.66-windows-x86_64-cuda-cuda13").mkdir(parents=True)
+    (where / "shapes" / "inkling2" / "engine" / "0.1.67-windows-x86_64-cuda-cuda13").mkdir(parents=True)
+    return where
+
+
+def supervisor_for(tmp_path: Path) -> tuple[svc.Supervisor, list[str]]:
+    """A supervisor whose log is a list, with nothing of the real service manager behind it."""
+    lines: list[str] = []
+    supervisor = svc.Supervisor("StrataTestNoSuchService", tmp_path / "service.conf")
+    supervisor.log = lines.append
+    return supervisor, lines
+
+
+def test_conf_values_reads_the_component_folder(tmp_path):
+    config = write_config(tmp_path / "strata-a.json")
+    where = component_folder(tmp_path)
+    conf = svc.conf_values(f"config={config}\ncomponents={where}\n")
+    assert Path(conf["components"]) == where
+    assert conf["unknown"] == []
+
+
+def test_conf_values_rejects_a_component_folder_that_is_not_there(tmp_path):
+    config = write_config(tmp_path / "strata-a.json")
+    with pytest.raises(svc.ServiceError, match="is not a folder"):
+        svc.conf_values(f"config={config}\ncomponents=D:\\nowhere\\components\n")
+
+
+def test_the_component_folder_comes_from_the_line_then_the_engine_package(tmp_path):
+    where = component_folder(tmp_path)
+    assert svc.components_dir_for({"components": str(where)}) == where
+    packaged = where / "engine" / "0.1.66-windows-x86_64-cuda-cuda13" / "strata.exe"
+    packaged.write_bytes(b"MZ")
+    assert svc.components_dir_for({"engine": str(packaged)}) == where
+    hand_build = tmp_path / "build-906-win" / "strata.exe"
+    hand_build.parent.mkdir()
+    hand_build.write_bytes(b"MZ")
+    assert svc.components_dir_for({"engine": str(hand_build)}) == svc.STATE_DIR / "components"
+
+
+def test_each_turn_points_the_server_at_the_component_folder(monkeypatch, tmp_path):
+    where = component_folder(tmp_path)
+    monkeypatch.setenv("STRATA_COMPONENTS_DIR", "C:\\elsewhere")
+    assert svc.apply_components_env({"components": str(where)}) == where
+    assert Path(os.environ["STRATA_COMPONENTS_DIR"]) == where
+
+
+def test_the_shape_archs_are_the_serve_modules_own():
+    """The names are serve/inkling_kind.ARCH and serve/hy4_kind.ARCH; a rename there must not leave a copy behind."""
+    inkling = importlib.import_module("serve.inkling_kind")
+    hy4 = importlib.import_module("serve.hy4_kind")
+    assert set(svc.CUSTOM_SHAPE_ARCHS) == {inkling.ARCH, hy4.ARCH}
+
+
+def test_a_shape_model_keeps_its_own_engine_and_no_copy_is_written(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "STATE_DIR", tmp_path / "state")
+    supervisor, lines = supervisor_for(tmp_path)
+    config = tmp_path / "strata-inkling-2-mini-sq-20.json"
+    config.write_text(json.dumps({"exe": "component:strata-inkling", "args": ["--native", "m.strata"],
+                                  "arch": "inkling2_loop", "model_name": "inkling-2-mini-sq-20"}), encoding="utf-8")
+    engine = str(tmp_path / "engine" / "strata.exe")
+    assert supervisor._engine_config(config, engine) == config
+    assert not (svc.STATE_DIR / "run-config.json").exists(), "the config's own engine is the one that runs"
+    assert supervisor._engine_config(config, engine) == config
+    assert sum("runs on its own engine" in line for line in lines) == 1, "said once, not once per watchdog turn"
+    assert any("does not replace it" in line for line in lines)
+
+
+def test_a_strata_engine_model_still_takes_the_engine_from_service_conf(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, "STATE_DIR", tmp_path / "state")
+    supervisor, _lines = supervisor_for(tmp_path)
+    config = write_config(tmp_path / "strata-qwen.json", model="qwen3.8-flash-next-iq2_xs")
+    copy = supervisor._engine_config(config, "D:\\engines\\strata.exe")
+    assert copy != config and copy.name == "run-config.json"
+    assert json.loads(copy.read_text(encoding="utf-8"))["exe"] == "D:\\engines\\strata.exe"
+
+
+def test_a_shape_engine_missing_from_the_folder_says_which_line_fixes_it(tmp_path):
+    config = tmp_path / "strata-inkling.json"
+    config.write_text(json.dumps({"exe": "component:strata-inkling", "args": [], "arch": "inkling2_loop"}),
+                      encoding="utf-8")
+    supervisor, _lines = supervisor_for(tmp_path)
+    with pytest.raises(svc.ServiceError) as caught:
+        supervisor._check_own_engine(config, {"components": str(tmp_path / "empty")})
+    assert "strata-inkling" in str(caught.value)
+    assert "components=<that folder>" in str(caught.value)
+    assert "Strata_Engine.ps1 -Components" in str(caught.value)
+
+
+def test_a_shape_engine_where_the_service_reads_it_is_accepted(tmp_path):
+    where = component_folder(tmp_path)
+    config = tmp_path / "strata-inkling.json"
+    config.write_text(json.dumps({"exe": "component:strata-inkling", "args": [], "arch": "inkling2_loop"}),
+                      encoding="utf-8")
+    supervisor, _lines = supervisor_for(tmp_path)
+    supervisor._check_own_engine(config, {"components": str(where)})       # no refusal
+
+
+def test_ensure_conf_components_writes_the_line_and_keeps_the_rest(tmp_path):
+    config = write_config(tmp_path / "strata-a.json")
+    conf = tmp_path / "service.conf"
+    conf.write_text(f"config={config}\nport=8090\n", encoding="utf-8")
+    where = component_folder(tmp_path)
+    assert svc.ensure_conf_components(conf, where) == where
+    text = conf.read_text(encoding="utf-8")
+    assert f"components={where}" in text
+    assert "port=8090" in text, "the person's own settings are kept"
+    assert svc.ensure_conf_components(conf, None) == where, "a second switch uses the line already there"
+
+
+def test_ensure_conf_components_leaves_a_folder_that_holds_no_engine_alone(tmp_path, monkeypatch):
+    """The folder of the person running this is only written when it really holds an engine."""
+    (tmp_path / "AppData" / "Local" / "Strata" / "components" / "empty").mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
+    config = write_config(tmp_path / "strata-a.json")
+    conf = tmp_path / "service.conf"
+    conf.write_text(f"config={config}\n", encoding="utf-8")
+    assert svc.ensure_conf_components(conf) is None
+    assert "components=" not in conf.read_text(encoding="utf-8")
+
+
+def test_an_explicit_component_folder_that_holds_no_engine_is_refused(tmp_path):
+    """-Components is the person saying where it is: a folder with no engine in it is a mistake, not a default."""
+    config = write_config(tmp_path / "strata-a.json")
+    conf = tmp_path / "service.conf"
+    conf.write_text(f"config={config}\n", encoding="utf-8")
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(svc.ServiceError, match="holds no engine"):
+        svc.ensure_conf_components(conf, tmp_path / "empty")
+    assert "components=" not in conf.read_text(encoding="utf-8")
+
+
 # ------------------------------------------------------------------------------ boot registration
 
 def test_build_bin_path_quotes_paths_with_spaces(tmp_path):
@@ -223,6 +364,7 @@ def test_prepare_environment_points_state_at_the_service_folder(monkeypatch):
         svc.prepare_environment()
         assert Path(os.environ["STRATA_RUNTIME_DIR"]) == svc.STATE_DIR / "runtime"
         assert Path(os.environ["STRATA_PROFILE_DIR"]) == svc.STATE_DIR / "profiles"
+        assert Path(os.environ["STRATA_COMPONENTS_DIR"]) == svc.STATE_DIR / "components"
         assert os.environ["PYTHONUTF8"] == "1"
     finally:
         for key, value in saved.items():

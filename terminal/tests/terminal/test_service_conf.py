@@ -107,6 +107,28 @@ class ServiceConf(unittest.TestCase):
         self.assertIn("#engine=component:strata-engine", text)
         self.assertNotIn("\nengine=", text)               # a fresh install serves what its config names
 
+    def test_components_may_name_the_folder_the_engines_live_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            where = Path(tmp) / "components"
+            (where / "engine").mkdir(parents=True)
+            conf = service.conf_values(f"config=strata-iq2_xs-20k.json\ncomponents={where}\n")
+        self.assertEqual(Path(conf["components"]), where)
+        self.assertEqual(conf["unknown"], [])
+
+    def test_a_missing_component_folder_is_one_plain_sentence(self):
+        with self.assertRaises(service.ServiceError) as caught:
+            service.conf_values("config=strata-iq2_xs-20k.json\ncomponents=D:\\nowhere\\components\n")
+        self.assertIn("is not a folder", str(caught.exception))
+        self.assertIn("shapes", str(caught.exception))
+
+    def test_the_written_file_names_components_as_a_commented_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "service.conf"
+            service.write_conf(path, Path("D:/Strata/strata-iq2_xs-20k.json"), [])
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("#components=", text)
+        self.assertNotIn("\ncomponents=", text)           # a fresh install looks where engine= says, then its state folder
+
 
 class ModelAnswers(unittest.TestCase):
     """The readiness question the switch asks: one chat request, not just ``/health``."""

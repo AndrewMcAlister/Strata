@@ -15,10 +15,17 @@
     a path (D:\Strata\build-906-win\strata.exe) or component:strata-engine (the engine installed for this
     PC's card). One folder of model configs, two PCs, two engines - that is what the line is for.
 
+    service.conf's components= names the folder the engine packages are installed in (usually
+    %LOCALAPPDATA%\Strata\components). The service runs as LocalSystem, which has no profile of its own, so it
+    cannot find the package of a model with its own engine (Inkling-2-Mini: strata-inkling, Hy4-Flash, a Qwen4
+    shape) without this line. `strata launch` and the app run as the person, so they never need it.
+
         Strata_Engine.ps1                 what this PC has, and what Strata will use (changes nothing)
         Strata_Engine.ps1 -List           every engine installed for this user
         Strata_Engine.ps1 -Set <value>    write engine= into service.conf (a path, or component:<name>)
         Strata_Engine.ps1 -Clear          drop engine=, so the model config's own "exe" is used
+        Strata_Engine.ps1 -Components <folder>   write components= (the engine package folder)
+        Strata_Engine.ps1 -ClearComponents       drop components=
         Strata_Engine.ps1 -Set ... -Restart   ...and restart the service (asks for Administrator)
 
     Nothing is downloaded here: an engine that is not installed is `strata components update`'s job.
@@ -26,6 +33,8 @@
 param(
     [string]$Set,
     [switch]$Clear,
+    [string]$Components,
+    [switch]$ClearComponents,
     [switch]$List,
     [switch]$Restart,
     [string]$Root = 'D:\Strata'
@@ -47,27 +56,30 @@ function ConfPath {
     return (Join-Path $programData 'Strata\service\service.conf')
 }
 
-function Read-Engine([string]$path) {
+function Read-Key([string]$path, [string]$key) {
     if (-not (Test-Path -LiteralPath $path)) { return '' }
     foreach ($line in Get-Content -LiteralPath $path) {
-        if ($line -match '^\s*engine\s*=\s*(.+?)\s*$') { return $matches[1].Trim('"').Trim("'") }
+        if ($line -match ('^\s*' + [regex]::Escape($key) + '\s*=\s*(.+?)\s*$')) { return $matches[1].Trim('"').Trim("'") }
     }
     return ''
 }
 
-function Set-Engine([string]$path, [string]$value) {
+function Set-Key([string]$path, [string]$key, [string]$value) {
     if (-not (Test-Path -LiteralPath $path)) { throw "$path does not exist. Install the service first." }
     $lines = @(Get-Content -LiteralPath $path)
     $found = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '^\s*engine\s*=') {
-            if ($value) { $lines[$i] = "engine=$value" } else { $lines[$i] = "#engine=" }
+        if ($lines[$i] -match ('^\s*' + [regex]::Escape($key) + '\s*=')) {
+            if ($value) { $lines[$i] = "$key=$value" } else { $lines[$i] = "#$key=" }
             $found = $true
         }
     }
-    if (-not $found -and $value) { $lines += "engine=$value" }
+    if (-not $found -and $value) { $lines += "$key=$value" }
     Set-Content -LiteralPath $path -Value $lines -Encoding utf8
 }
+
+function Read-Engine([string]$path) { return (Read-Key $path 'engine') }
+function Set-Engine([string]$path, [string]$value) { Set-Key $path 'engine' $value }
 
 $conf = ConfPath
 
@@ -76,11 +88,25 @@ if ($List) {
     exit $LASTEXITCODE
 }
 
-if ($Set -or $Clear) {
-    $value = if ($Clear) { '' } else { $Set }
-    Set-Engine $conf $value
-    if ($value) { Write-Host "engine=$value" -ForegroundColor Cyan } else { Write-Host 'engine= removed: the model config names the engine' -ForegroundColor Cyan }
-    Write-Host "written to $conf"
+if ($Set -or $Clear -or $Components -or $ClearComponents) {
+    if ($Set -or $Clear) {
+        $value = if ($Clear) { '' } else { $Set }
+        Set-Engine $conf $value
+        if ($value) { Write-Host "engine=$value" -ForegroundColor Cyan } else { Write-Host 'engine= removed: the model config names the engine' -ForegroundColor Cyan }
+        Write-Host "written to $conf"
+    }
+    if ($Components -or $ClearComponents) {
+        $folder = if ($ClearComponents) { '' } else { $Components }
+        if ($folder) {
+            if (-not (Test-Path -LiteralPath $folder)) { throw "$folder does not exist. That is the folder the engine packages are installed in, usually %LOCALAPPDATA%\Strata\components." }
+            Set-Key $conf 'components' $folder
+            Write-Host "components=$folder" -ForegroundColor Cyan
+        } else {
+            Set-Key $conf 'components' ''
+            Write-Host 'components= removed: the service uses a packaged engine= path, then its own state folder' -ForegroundColor Cyan
+        }
+        Write-Host "written to $conf"
+    }
     if ($Restart) {
         & powershell -NoProfile -ExecutionPolicy Bypass -File $SERVICE -Action Restart
         exit $LASTEXITCODE
@@ -125,5 +151,19 @@ if ($named) {
 } else {
     Write-Host 'The Windows service runs the engine its model config names (no engine= in service.conf).'
 }
+
+# A model with its own engine (Inkling-2-Mini, Hy4-Flash, a Qwen4 shape) runs a package from the components
+# folder, and the service has no profile of its own: without components= it reads its own empty state folder
+# and says "needs its own engine" in its log.
+$folder = Read-Key $conf 'components'
+$here = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Strata\components' } else { '' }
+if ($folder) {
+    Write-Host "The service finds engine packages in (service.conf): $folder" -ForegroundColor Green
+} else {
+    Write-Host 'The service finds engine packages in its own state folder (no components= in service.conf).'
+    if ($here -and ((Test-Path -LiteralPath (Join-Path $here 'engine')) -or (Test-Path -LiteralPath (Join-Path $here 'shapes')))) {
+        Write-Host ("  This PC's component folder is {0}: a model with its own engine needs -Components {0}" -f $here) -ForegroundColor Yellow
+    }
+}
 Write-Host "Settings file: $conf"
-Write-Host 'Change it with -Set <path or component:strata-engine> or -Clear; add -Restart to restart the service.'
+Write-Host 'Change it with -Set <path or component:strata-engine> or -Clear, or -Components <folder>; add -Restart to restart the service.'

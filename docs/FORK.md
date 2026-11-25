@@ -287,10 +287,20 @@ config=D:\Strata\strata-iq3_xxs.json
 #port=8080
 #host=127.0.0.1
 #shutdown_timeout=30
+#components=C:\Users\you\AppData\Local\Strata\components
 ```
 
   Edit `config=`, then `-Action Restart`. The installing account is granted Modify on
   the file, so Notepad needs no elevation. A reinstall keeps an existing `config=`.
+- `components=` names the folder the engine packages are installed in, usually
+  `%LOCALAPPDATA%\Strata\components`. The service is LocalSystem and has no profile of its
+  own, so it cannot see that folder by itself: a model with its own engine (Inkling-2-Mini,
+  Hy4-Flash, a Qwen4 shape) runs a package from `shapes\<shape>\engine\` and says "needs its
+  own engine" in the log without the line. `install` and `serve` write it from the folder of
+  the person running them; `Scripts\Strata_Engine.ps1 -Components <folder>` writes it by
+  hand. Without it the folder is taken from a packaged `engine=` path, then the service's own
+  `state\components`. `engine=` itself chooses between builds of the Strata engine, so it
+  never applies to a model of its own shape.
 - Watchdog: `ready` waits; `starting` waits; `failed` or `stale` stops what is left and
   starts again; backoff 5 s doubling to 60 s, reset on `ready`. A failed start copies
   the runtime's error, exit codes and the server's last lines into the daily log.

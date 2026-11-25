@@ -24,6 +24,14 @@ run config's own ``exe``: a path (``D:\\Strata\\build-906-win\\strata.exe``) or
 how one folder of model configs is shared by two PCs whose engines differ, and how a
 new engine is switched without editing a model config.
 
+An optional ``components=`` line names the folder the engine packages are installed in
+(``<profile>\\AppData\\Local\\Strata\\components``: ``engine\\`` for the Strata engine and
+``shapes\\<shape>\\engine\\`` for a model's own engine). The service runs as LocalSystem,
+whose own profile holds no components, so this line is what lets a model with its own
+engine - Inkling-2-Mini (``strata-inkling``), Hy4-Flash, a Qwen4 shape - start from the
+service at all. Without it the folder is taken from a packaged ``engine=`` path, and
+failing that the service's own state folder is used.
+
 Commands (normally through Scripts\\Strata_Service.ps1, which asks for elevation):
 
     install [--config PATH] [--no-start] [--force]
@@ -101,7 +109,7 @@ class ServiceError(Exception):
 
 # ------------------------------------------------------------------------------------------------ conf
 
-CONF_KEYS = ("config", "port", "host", "shutdown_timeout", "engine")
+CONF_KEYS = ("config", "port", "host", "shutdown_timeout", "engine", "components")
 
 
 def parse_conf_text(text: str) -> tuple[dict, list[str]]:
@@ -157,8 +165,18 @@ def conf_values(text: str) -> dict:
             raise ServiceError(f"service.conf: engine={engine!r} is neither a file nor a component "
                                f"reference (component:strata-engine is the engine installed for this PC)")
         engine = str(engine_path)
+    components = (values.get("components") or "").strip()
+    if components:
+        components_path = Path(components).expanduser()
+        if not components_path.is_absolute():
+            components_path = (ROOT / components_path).resolve()
+        if not components_path.is_dir():
+            raise ServiceError(f"service.conf: components={components!r} is not a folder. It is the folder the engine "
+                               r"packages are installed in (%LOCALAPPDATA%\Strata\components: engine\ and shapes\), "
+                               f"for example {local_components_dir() or Path.home() / 'AppData' / 'Local' / 'Strata' / 'components'}")
+        components = str(components_path)
     return {"config": str(path), "port": port, "host": values.get("host") or None,
-            "shutdown_timeout": shutdown, "engine": engine or None,
+            "shutdown_timeout": shutdown, "engine": engine or None, "components": components or None,
             "unknown": sorted(set(values) - set(CONF_KEYS))}
 
 
@@ -170,6 +188,135 @@ def load_conf(path: Path) -> dict:
     except OSError as exc:
         raise ServiceError(f"cannot read {path} ({exc.__class__.__name__})", 5) from None
     return conf_values(text)
+
+
+# ------------------------------------------------------------------------------------------------ component folder
+
+#: A model of its own shape runs on an engine compiled for that geometry, a program of its own: serve/inkling_kind.ARCH
+#: and serve/hy4_kind.ARCH. A config of one of these is never run on the Strata engine, whatever service.conf says.
+CUSTOM_SHAPE_ARCHS = ("inkling2_loop", "hy4flash")
+STRATA_ENGINE_REFERENCE = "component:strata-engine"
+
+
+def local_components_dir() -> Path | None:
+    """The engine component folder of the person running this (install, serve, a Terminal), or None without a profile.
+
+    The service itself runs as LocalSystem, whose ``%LOCALAPPDATA%`` is the system profile's and holds no engine: that is
+    why service.conf can name this folder and why Install/Serve (which run as the installing person, elevated) write it.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return None
+    return Path(base) / "Strata" / "components"
+
+
+def is_component_folder(path: Path) -> bool:
+    """A component folder holds ``engine\\`` (the Strata engine) or ``shapes\\`` (the engines of model shapes)."""
+    try:
+        return path.is_dir() and ((path / "engine").is_dir() or (path / "shapes").is_dir())
+    except OSError:
+        return False
+
+
+def components_dir_for(conf: dict) -> Path:
+    """The folder the server looks for engine packages in, for one service.conf.
+
+    ``components=`` first. Without it, a packaged ``engine=`` path (``<components>\\engine\\<version>-...\\strata.exe``)
+    says where the components are, which repairs a service.conf written before the line existed. Otherwise the service's
+    own state folder, as before - the place a LocalSystem service can write, and the one with nothing in it.
+    """
+    named = (conf or {}).get("components")
+    if named:
+        return Path(named)
+    engine = str((conf or {}).get("engine") or "")
+    if engine and not engine.startswith("component:"):
+        package = Path(engine).expanduser().parent          # <components>\engine\<version>-<platform>[-<variant>]
+        folder = package.parent                             # <components>\engine
+        if folder.name.lower() == "engine" and folder.is_dir():
+            return folder.parent                            # <components>
+    return STATE_DIR / "components"
+
+
+def apply_components_env(conf: dict) -> Path:
+    """Point this process - and the server and engine it starts - at that folder. Called each watchdog turn, so a
+    ``components=`` line added to service.conf is picked up by the next restart without touching the environment by hand."""
+    where = components_dir_for(conf)
+    os.environ["STRATA_COMPONENTS_DIR"] = str(where)
+    return where
+
+
+def own_engine_of(data: dict) -> str | None:
+    """What a run config runs on when that is not the Strata engine, or None for a Strata-engine model.
+
+    ``component:strata-inkling`` (the shape's component) for a config that names it, and the config's own ``exe`` for a
+    config whose ``arch`` is a model shape's while its ``exe`` is a path (serve/server.py swaps that path for the shape's
+    reference before it starts, so the path there is not what runs).
+    """
+    if not isinstance(data, dict):
+        return None
+    exe = str(data.get("exe") or "")
+    if exe.startswith("component:") and exe != STRATA_ENGINE_REFERENCE:
+        return exe
+    if str(data.get("arch") or "") in CUSTOM_SHAPE_ARCHS:
+        return exe or "its own engine"
+    return None
+
+
+def set_conf_value(path: Path, key: str, value: str | None) -> bool:
+    """Set one ``key=`` line in an existing service.conf, changing nothing else; None comments the line out.
+
+    Edited in place rather than re-rendered: a person may have uncommented ``port=`` or added a setting of their own, and
+    a model switch must not drop it. True when the file changed. A missing file is left missing.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    found = False
+    for index, line in enumerate(lines):
+        if line.strip().lower().startswith(f"{key.lower()}="):
+            lines[index] = f"{key}={value}" if value else f"#{key}="
+            found = True
+            break
+    if not found:
+        if not value:
+            return False
+        lines.append(f"{key}={value}")
+    fresh = "\n".join(lines) + "\n"
+    if fresh == text:
+        return False
+    path.write_text(fresh, encoding="utf-8")
+    return True
+
+
+def ensure_conf_components(path: Path, explicit: str | os.PathLike | None = None) -> Path | None:
+    """Make sure service.conf names the engine component folder, and return it (or None when this PC has none).
+
+    A model with its own engine (Inkling-2-Mini, Hy4-Flash, a Qwen4 shape) starts an engine package from that folder, and
+    the service - LocalSystem - has no components of its own: without the line the start fails with "needs its own engine",
+    which says nothing about the line. ``explicit`` (-Components) wins; otherwise the folder of the person running this,
+    which is the same person for Install and Serve because elevation keeps the account.
+    """
+    try:
+        conf = load_conf(path)
+    except ServiceError:
+        conf = {}
+    if conf.get("components"):
+        return Path(conf["components"])
+    candidate = explicit or local_components_dir()
+    if not candidate:
+        return None
+    where = Path(candidate).expanduser()
+    if not where.is_absolute():
+        where = (Path.cwd() / where).resolve()
+    if not is_component_folder(where):
+        if explicit:
+            raise ServiceError(f"-Components {where} holds no engine package folder: it needs engine\\ (the Strata "
+                               f"engine) or shapes\\ (the engines of model shapes).")
+        return None
+    set_conf_value(path, "components", str(where))
+    return where
 
 
 def run_config_summary(path: Path) -> dict | None:
@@ -232,6 +379,8 @@ def _model_comment(model: dict) -> str:
 
 
 def render_conf(config: Path, models: list[dict]) -> str:
+    local = local_components_dir()
+    components_example = str(local) if local is not None else r"%LOCALAPPDATA%\Strata\components"
     lines = [
         "# Strata Windows service settings.",
         "#",
@@ -253,6 +402,13 @@ def render_conf(config: Path, models: list[dict]) -> str:
         "# engine= runs another engine than the config's own \"exe\": a path, or",
         "# component:strata-engine (the engine installed for this PC's graphics card).",
         "#engine=component:strata-engine",
+        "#",
+        "# components= is the folder the engine packages are installed in: engine\\ for the Strata",
+        "# engine, shapes\\<shape>\\ for a model's own engine (Inkling-2-Mini, Hy4-Flash, a Qwen4",
+        "# shape). The service runs as LocalSystem, which has no profile of its own and so no",
+        "# components: a model with its own engine cannot start from the service without this",
+        "# line, and says \"needs its own engine\" in the log.",
+        f"#components={components_example}",
         "",
     ]
     return "\n".join(lines)
@@ -269,19 +425,10 @@ def set_conf_config(path: Path, config: Path) -> None:
     The file is edited in place rather than re-rendered: a person may have uncommented
     ``port=`` or added a setting of their own, and a model switch must not drop it.
     """
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except FileNotFoundError:
-        write_conf(path, config, discover_models(ROOT))
+    if set_conf_value(path, "config", str(config)):
         return
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip().startswith("config="):
-            lines[index] = f"config={config}"
-            break
-    else:
-        lines.append(f"config={config}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not path.is_file():
+        write_conf(path, config, discover_models(ROOT))
 
 
 def grant_user_write(path: Path) -> None:
@@ -678,6 +825,9 @@ class Supervisor:
         self.log_path = LOG_DIR / f"service-{time.strftime('%Y-%m-%d')}.log"
         self._runtime = None
         self._profiles = None
+        # what was last logged about the component folder and a model's own engine: once per change, not once per turn
+        self._components_said = None
+        self._own_engine_said = None
 
     # -- logging ---------------------------------------------------------------------------------
     def log(self, message: str) -> None:
@@ -756,7 +906,12 @@ class Supervisor:
     def _engine_config(self, source: Path, engine: str | None) -> Path:
         """The run config the profile points at. Without ``engine=`` it is the config itself. With it, a copy in the
         service's own state folder whose ``"exe"`` is the configured engine, so one folder of model configs can serve
-        PCs whose engines differ (a packaged engine on one, a hand build on the other) without anyone editing them."""
+        PCs whose engines differ (a packaged engine on one, a hand build on the other) without anyone editing them.
+
+        A model of its own shape is the exception: ``engine=`` names the Strata engine, and such a model runs on an engine
+        compiled for its geometry, a program of its own (``component:strata-inkling``, ``component:strata-hy4``). The
+        server asks for that engine from the config's ``arch`` whatever its ``exe`` says, so the copy is not written and
+        the config is used as it is."""
         if not engine:
             return source
         try:
@@ -765,6 +920,14 @@ class Supervisor:
             raise ServiceError(f"cannot read the model config {source} ({exc.__class__.__name__})") from None
         if not isinstance(data, dict) or not data.get("exe") or not isinstance(data.get("args"), list):
             raise ServiceError(f"{source} is not a Strata model config: it needs 'exe' and 'args'")
+        own = own_engine_of(data)
+        if own:
+            said = (str(source), own)
+            if self._own_engine_said != said:
+                self._own_engine_said = said
+                self.log(f"{source.name} runs on its own engine ({own}): service.conf's engine= names the Strata engine "
+                         f"and does not replace it, so the model config is used as it is")
+            return source
         data["exe"] = engine
         text = json.dumps(data, indent=1)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -779,12 +942,45 @@ class Supervisor:
                      f"({source.name} names its own)")
         return target
 
+    def _check_own_engine(self, config: Path, conf: dict) -> None:
+        """Refuse, with the line that fixes it, when a model's own engine is not in the folder the server reads.
+
+        The folder is ``components=``'s (see components_dir_for). Left alone, the start fails a few seconds later with
+        "needs its own engine ... the component folder holds no engine package", which says nothing about service.conf,
+        and the watchdog repeats it every two minutes.
+        """
+        try:
+            data = json.loads(config.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return
+        own = own_engine_of(data) if isinstance(data, dict) else None
+        if not own or not str(own).startswith("component:"):
+            return
+        name = str(own)[len("component:"):]
+        try:
+            from strata_control import shape_engine
+        except Exception:                                 # noqa: BLE001 - a Control without the module says its own line
+            return
+        shape = shape_engine.shape_of_component(name)
+        if shape is None:
+            return
+        where = components_dir_for(conf)
+        if (where / "shapes" / shape / "engine").is_dir():
+            return
+        raise ServiceError(
+            f"{config.name} runs on {name}, which is installed in the component folder of the person who set it up, and "
+            f"not in {where}, the folder this service reads. Add the folder to service.conf and restart the service:  "
+            f"components=<that folder>  (usually %LOCALAPPDATA%\\Strata\\components, for example "
+            f"{local_components_dir() or Path.home() / 'AppData' / 'Local' / 'Strata' / 'components'}). "
+            f"Scripts\\Strata_Engine.ps1 -Components <folder> writes the line.")
+
     def _ensure_profile(self, conf: dict) -> None:
         profiles = self._profiles
         source = Path(conf["config"]).resolve()
         if not source.is_file():
             raise ServiceError(f"the model config {source} is not there")
         config = self._engine_config(source, conf.get("engine"))
+        self._check_own_engine(config, conf)
         try:
             profile, revision = profiles.load(PROFILE)
         except profiles.ProfileError:
@@ -828,6 +1024,11 @@ class Supervisor:
                 continue
             try:
                 conf = load_conf(self.conf_path)
+                where = apply_components_env(conf)
+                if self._components_said != str(where):
+                    self._components_said = str(where)
+                    self.log(f"engine packages are looked for in {where}"
+                             + ("  (components= in service.conf)" if conf.get("components") else "  (no components= line)"))
                 if conf["unknown"]:
                     self.log("ignored unknown setting(s) in service.conf: " + ", ".join(conf["unknown"]))
                 self._ensure_profile(conf)
@@ -945,6 +1146,11 @@ def prepare_environment() -> None:
     profiles are private to the account that writes them (Strata restricts them to
     the current user), so they must be written by the service, not read from the
     installing person's %APPDATA%.
+
+    The component folder starts as the service's own empty one: a service.conf with
+    ``components=`` (or a packaged ``engine=`` path) points it at the installed engine
+    packages on every watchdog turn, which is what a model with its own engine - one
+    from ``shapes/<shape>/engine/`` - needs to start from the service at all.
     """
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -1138,6 +1344,9 @@ def command_install(args) -> int:
         write_conf(CONF_PATH, chosen, discover_models(ROOT))
         wrote_conf = True
         print(f"Wrote {CONF_PATH}")
+    components = ensure_conf_components(CONF_PATH, getattr(args, "components", None))
+    if components:
+        print(f"Components {components}  (the folder the engine packages are installed in)")
     grant_user_write(CONF_PATH)
     python = stable_python(ROOT)
     bin_path = build_bin_path(python, SERVICE_SCRIPT, args.name)
@@ -1252,6 +1461,9 @@ def command_serve(args) -> int:
         raise ServiceError(f"Service '{args.name}' is not installed. "
                            f"Install it with: Scripts\\Strata_Service.ps1 -Action Install", 5)
     set_conf_config(CONF_PATH, config)
+    components = ensure_conf_components(CONF_PATH, getattr(args, "components", None))
+    if components:
+        print(f"Engine packages {components}")
     grant_user_write(CONF_PATH)
     print(f"Serving {config}")
     print(f"Wrote   {CONF_PATH}")
@@ -1297,6 +1509,8 @@ def command_status(args) -> int:
     print(f"Model      {conf['config']}")
     if conf.get("engine"):
         print(f"Engine     {conf['engine']}  (from service.conf; the config's own exe is not used)")
+    print(f"Engines in {components_dir_for(conf)}"
+          + ("  (components= in service.conf)" if conf.get("components") else "  (no components= line)"))
     try:
         data = json.loads(Path(conf["config"]).read_text(encoding="utf-8-sig"))
         if data.get("log"):
@@ -1342,6 +1556,9 @@ def parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
     install = sub.add_parser("install", help="register the service (Administrator)")
     install.add_argument("--config", metavar="PATH", help="the model config to serve (default: the newest strata-*.json)")
+    install.add_argument("--components", metavar="PATH",
+                         help="the folder the engine packages are installed in (default: this person's "
+                              r"%LOCALAPPDATA%\Strata\components)")
     install.add_argument("--name", default=SERVICE_NAME, help="service name (default: Strata)")
     install.add_argument("--no-start", action="store_true", help="register but do not start it")
     install.add_argument("--force", action="store_true", help="replace a service of the same name not made by this script")
@@ -1361,6 +1578,9 @@ def parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="serve another run config and restart (Administrator)")
     serve.add_argument("--config", metavar="PATH", required=True,
                        help="the run config to serve, for example strata-iq3_xxs.json")
+    serve.add_argument("--components", metavar="PATH",
+                       help="the folder the engine packages are installed in, when service.conf does not name it "
+                            r"(default: this person's %LOCALAPPDATA%\Strata\components)")
     serve.add_argument("--name", default=SERVICE_NAME)
     serve.add_argument("--start-wait", type=float, default=300,
                        help="seconds to wait for the chosen model to answer (default 300)")

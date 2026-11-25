@@ -29,6 +29,12 @@
 #
 # Options:
 #   -Config PATH   Install and Serve: the model config to serve.
+#   -Components PATH  Install and Serve: the folder the engine packages are installed in
+#                  (usually %LOCALAPPDATA%\Strata\components). The service runs as
+#                  LocalSystem, which has no component folder of its own, so a model with
+#                  its own engine (Inkling-2-Mini, Hy4-Flash) needs service.conf to name
+#                  this folder. Without the option the folder of the person running this
+#                  is used, when it holds an engine.
 #   -NoStart       install only: register but do not start.
 #   -Force         install only: replace a same-named service not made by this script.
 #   -Purge         uninstall only: also delete settings, logs and service state.
@@ -40,6 +46,7 @@ param(
     [ValidateSet('Install', 'Uninstall', 'Start', 'Stop', 'Restart', 'Serve', 'Status', 'Logs', 'Edit')]
     [string]$Action = 'Status',
     [string]$Config,
+    [string]$Components,
     [switch]$NoStart,
     [switch]$Purge,
     [switch]$Force,
@@ -134,18 +141,38 @@ if ($Action -eq 'Edit') {
     exit 0
 }
 
+function Resolve-Components {
+    # The folder the engine packages are installed in, named in service.conf by components=. The
+    # service runs as LocalSystem, whose own profile holds no components, so a model with its own
+    # engine (Inkling-2-Mini, Hy4-Flash, a Qwen4 shape) cannot start unless the line names the
+    # folder of the person who set the model up. Install and Serve run as that person (elevation
+    # keeps the account), so %LOCALAPPDATA% is theirs. Nothing is passed when the folder here has
+    # no engine in it: the service then derives the folder from a packaged engine=, or keeps its own.
+    if ($Components) { return $Components }
+    if (-not $env:LOCALAPPDATA) { return '' }
+    $candidate = Join-Path $env:LOCALAPPDATA 'Strata\components'
+    if ((Test-Path -LiteralPath (Join-Path $candidate 'engine')) -or
+        (Test-Path -LiteralPath (Join-Path $candidate 'shapes'))) {
+        return $candidate
+    }
+    return ''
+}
+
 $needsAdmin = @('Install', 'Uninstall', 'Start', 'Stop', 'Restart', 'Serve') -contains $Action
 $python = Find-Python
 if (-not $python) {
     Write-Error "No Python was found. Set STRATA_PYTHON to the python.exe that runs Strata, or install the Strata Terminal."
     exit 1
 }
+$componentArg = ''
+if ($Action -eq 'Install' -or $Action -eq 'Serve') { $componentArg = Resolve-Components }
 
 $pythonArgs = @()
 foreach ($extra in $python.Args) { $pythonArgs += $extra }
 $pythonArgs += @($serviceScript, ($Action.ToLowerInvariant()), '--name', $Name)
 if ($Action -eq 'Install') {
     if ($Config) { $pythonArgs += @('--config', $Config) }
+    if ($componentArg) { $pythonArgs += @('--components', $componentArg) }
     if ($NoStart) { $pythonArgs += '--no-start' }
     if ($Force) { $pythonArgs += '--force' }
 }
@@ -155,6 +182,7 @@ if ($Action -eq 'Serve') {
         exit 2
     }
     $pythonArgs += @('--config', $Config)
+    if ($componentArg) { $pythonArgs += @('--components', $componentArg) }
 }
 if ($Action -eq 'Uninstall' -and $Purge) { $pythonArgs += '--purge' }
 if ($Action -eq 'Logs') { $pythonArgs += @('--tail', [string]$Tail) }
@@ -176,10 +204,12 @@ if ($needsAdmin -and -not (Test-Admin)) {
     $parts += @($serviceScript, $Action.ToLowerInvariant(), '--name', $Name)
     if ($Action -eq 'Install') {
         if ($Config) { $parts += @('--config', $Config) }
+        if ($componentArg) { $parts += @('--components', $componentArg) }
         if ($NoStart) { $parts += '--no-start' }
         if ($Force) { $parts += '--force' }
     }
     if ($Action -eq 'Serve' -and $Config) { $parts += @('--config', $Config) }
+    if ($Action -eq 'Serve' -and $componentArg) { $parts += @('--components', $componentArg) }
     if ($Action -eq 'Uninstall' -and $Purge) { $parts += '--purge' }
     if ($Action -eq 'Logs') { $parts += @('--tail', [string]$Tail) }
     $quoted = ($parts | ForEach-Object { Quote-Text ([string]$_) }) -join ' '

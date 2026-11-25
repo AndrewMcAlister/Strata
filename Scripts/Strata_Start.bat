@@ -597,6 +597,11 @@ echo  The Strata service did not come back with this model (code %CODE%), so not
 echo  The end of the service log:
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Service.ps1" -Action Logs -Tail 20
+rem A model with its own engine (Inkling-2-Mini, Hy4-Flash, a Qwen4 shape) starts an engine package
+rem from the component folder, and the service - LocalSystem - has no folder of its own: without
+rem components= in service.conf the start fails with "needs its own engine" however right the rest
+rem is.  The log just printed says it; the fix is one line, so name the line as well.
+call :ownenginehint
 if not defined NOPAUSE goto servehold
 if "%TTY%"=="1" goto servehold
 goto eof
@@ -786,3 +791,23 @@ echo  START-HERE.bat was not found in %ROOT%, so Strata cannot be set up automat
 echo  Unpack or clone the whole Strata folder again.
 echo.
 exit /b 3
+
+rem --- the one line that fixes "needs its own engine" in the service log -------------------------
+rem Called after a failed model switch.  The newest service log is read for that sentence: it is the
+rem one reason whose fix is a single service.conf line, and the sentence itself never names the line.
+:ownenginehint
+set "SVDIR="
+for %%C in ("%SVCCONF%") do set "SVDIR=%%~dpC"
+if not defined SVDIR goto :eof
+set "SVCLOG="
+for /f "delims=" %%L in ('dir /b /o-d "%SVDIR%logs\service-*.log" 2^>nul') do if not defined SVCLOG set "SVCLOG=%SVDIR%logs\%%L"
+if not defined SVCLOG goto :eof
+findstr /i /c:"needs its own engine" "%SVCLOG%" >nul 2>nul
+if errorlevel 1 goto :eof
+echo.
+echo  This model runs on an engine package of its own, installed in the component folder of the person
+echo  who set it up.  The service reads the folder service.conf's components= names, and as a background
+echo  service it has no folder of its own, so that line has to name one.  Write it once, then start this
+echo  model again:
+echo    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Scripts\Strata_Engine.ps1" -Components "%LOCALAPPDATA%\Strata\components"
+goto :eof
